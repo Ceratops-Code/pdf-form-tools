@@ -6,7 +6,7 @@ from PIL import Image, ImageDraw
 from pypdf import PdfReader
 from reportlab.pdfgen import canvas
 
-from pdf_form_tools import Rect, centered_address_box
+from pdf_form_tools import Rect, centered_address_box, detect_id_slots
 
 
 def test_rect_inset() -> None:
@@ -124,7 +124,7 @@ def test_detect_id_slots_follows_printed_guides() -> None:
     for offset in range(100, 900, 100):
         page_gray[lower_start : rect.y2, rect.x + offset - 1 : rect.x + offset + 2] = 0
 
-    slots = overlay.detect_id_slots(page_gray, rect)
+    slots = detect_id_slots(page_gray, rect)
 
     assert len(slots) == 9
     assert slots[0] == Rect(13, 42, 94, 43)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from functools import lru_cache
 from io import BytesIO
@@ -16,16 +17,23 @@ from reportlab.pdfgen import canvas
 
 
 TEXT_COLOR = (20, 20, 20, 255)
+WINDOWS_FONT_DIR = Path(os.environ["WINDIR"]) / "Fonts" if "WINDIR" in os.environ else None
+
+
+def windows_font(name: str) -> list[Path]:
+    return [WINDOWS_FONT_DIR / name] if WINDOWS_FONT_DIR is not None else []
+
+
 FONT_CANDIDATES = {
     False: [
-        Path(r"C:\Windows\Fonts\arial.ttf"),
+        *windows_font("arial.ttf"),
         Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
         Path("/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf"),
         Path("/Library/Fonts/Arial.ttf"),
         Path("/System/Library/Fonts/Supplemental/Arial.ttf"),
     ],
     True: [
-        Path(r"C:\Windows\Fonts\arialbd.ttf"),
+        *windows_font("arialbd.ttf"),
         Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
         Path("/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf"),
         Path("/Library/Fonts/Arial Bold.ttf"),

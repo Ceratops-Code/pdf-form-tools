@@ -1,6 +1,7 @@
 from .pdf_form_overlay import (
     Rect,
     centered_address_box,
+    detect_id_slots,
     detect_lines,
     detect_square_boxes,
     draw_check,
@@ -15,6 +16,7 @@ from .pdf_form_overlay import (
 __all__ = [
     "Rect",
     "centered_address_box",
+    "detect_id_slots",
     "detect_lines",
     "detect_square_boxes",
     "draw_check",

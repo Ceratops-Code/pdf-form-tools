@@ -1,3 +1,5 @@
+"""Public geometry, detection, drawing, and PDF-overlay helpers."""
+
 from .pdf_form_overlay import (
     Rect,
     centered_address_box,

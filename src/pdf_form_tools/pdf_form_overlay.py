@@ -1,3 +1,5 @@
+"""Detect form geometry and render text, checks, signatures, and PDF overlays."""
+
 from __future__ import annotations
 
 import os
@@ -44,6 +46,8 @@ FONT_CANDIDATES = {
 
 @dataclass(frozen=True)
 class Rect:
+    """Integer pixel rectangle used by detection and drawing helpers."""
+
     x: int
     y: int
     w: int
@@ -141,6 +145,8 @@ def longest_true_segment(mask: np.ndarray, min_len: int) -> tuple[int, int] | No
 
 
 def writable_box(page_gray: np.ndarray, rect: Rect, row_threshold: float = 0.015, col_threshold: float = 0.03) -> Rect:
+    """Locate a low-ink writable area within a grayscale form region."""
+
     inner = rect.inset(8)
     crop = page_gray[inner.y:inner.y2, inner.x:inner.x2]
     ink = crop < 185
@@ -206,6 +212,8 @@ def draw_text(
     bold: bool = False,
     fill: tuple[int, int, int, int] = TEXT_COLOR,
 ) -> None:
+    """Draw fitted, direction-aware text inside a rectangle."""
+
     prepared = visual_text(text)
     font, bbox = fit_font(draw, text, rect, max_size=max_size, min_size=min_size, bold=bold)
     width = bbox[2] - bbox[0]
@@ -223,10 +231,14 @@ def draw_text(
 
 
 def centered_address_box(rect: Rect, *, top_pad: int, side_pad: int, height: int, right_pad: int | None = None) -> Rect:
+    """Return a padded horizontal band for centered address text."""
+
     return rect.band(top_pad=top_pad, height=height, left_pad=side_pad, right_pad=right_pad)
 
 
 def detect_square_boxes(page_gray: np.ndarray, region: Rect) -> list[Rect]:
+    """Detect checkbox-sized square contours in a grayscale page region."""
+
     crop = page_gray[region.y:region.y2, region.x:region.x2]
     _, thresh = cv2.threshold(crop, 210, 255, cv2.THRESH_BINARY_INV)
     contours, _ = cv2.findContours(thresh, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
@@ -242,6 +254,8 @@ def detect_square_boxes(page_gray: np.ndarray, region: Rect) -> list[Rect]:
 
 
 def detect_lines(page_gray: np.ndarray, region: Rect) -> list[Rect]:
+    """Detect long horizontal form lines in a grayscale page region."""
+
     crop = page_gray[region.y:region.y2, region.x:region.x2]
     _, thresh = cv2.threshold(crop, 200, 255, cv2.THRESH_BINARY_INV)
     contours, _ = cv2.findContours(thresh, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
@@ -257,6 +271,8 @@ def detect_lines(page_gray: np.ndarray, region: Rect) -> list[Rect]:
 
 
 def detect_id_slots(page_gray: np.ndarray, rect: Rect) -> list[Rect]:
+    """Detect the nine digit slots within an Israeli ID-number field."""
+
     crop = page_gray[rect.y:rect.y2, rect.x:rect.x2]
     guide_start = int(crop.shape[0] * 0.7)
     lower = crop[guide_start:, :]
@@ -304,6 +320,8 @@ def detect_id_slots(page_gray: np.ndarray, rect: Rect) -> list[Rect]:
 
 
 def draw_id_number(draw: ImageDraw.ImageDraw, page_gray: np.ndarray, rect: Rect, number: str) -> None:
+    """Draw one ID-number digit in each detected slot."""
+
     slots = detect_id_slots(page_gray, rect)
     if len(number) != len(slots):
         raise RuntimeError(f"ID length {len(number)} does not match detected slot count {len(slots)}.")
@@ -318,6 +336,8 @@ def draw_check(
     raise_px: int = 10,
     fill: tuple[int, int, int, int] = TEXT_COLOR,
 ) -> None:
+    """Draw a check mark inside a rectangle."""
+
     x0, y0 = rect.x, rect.y
     width = max(10, rect.w // 4)
     p1 = (x0 + rect.w * 0.18, y0 + rect.h * 0.54 - raise_px)
@@ -336,6 +356,8 @@ def paste_signature(
     target_height: int | None = None,
     y_offset: int = 45,
 ) -> None:
+    """Scale and alpha-composite a signature above a form line."""
+
     alpha_bbox = signature.getchannel("A").getbbox()
     if alpha_bbox:
         signature = signature.crop(alpha_bbox)
@@ -357,6 +379,8 @@ def paste_signature(
 
 
 def render_pdf_page(pdf_path: Path, page_index: int, scale: int, out_path: Path) -> Image.Image:
+    """Render one PDF page to an image, save it, and return the image."""
+
     document = fitz.open(pdf_path)
     try:
         page = document[page_index]
@@ -369,6 +393,8 @@ def render_pdf_page(pdf_path: Path, page_index: int, scale: int, out_path: Path)
 
 
 def merge_overlay_pdf(src_pdf: Path, overlay_png: Path, out_pdf: Path) -> None:
+    """Write a PDF with a PNG overlay merged onto the first source page."""
+
     reader = PdfReader(str(src_pdf))
     writer = PdfWriter()
 

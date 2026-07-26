@@ -6,6 +6,7 @@ import os
 from dataclasses import dataclass
 from functools import lru_cache
 from io import BytesIO
+from itertools import pairwise
 from pathlib import Path
 
 import cv2
@@ -16,7 +17,6 @@ from PIL import Image, ImageDraw, ImageFont
 from pypdf import PdfReader, PdfWriter
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
-
 
 TEXT_COLOR = (20, 20, 20, 255)
 WINDOWS_FONT_DIR = Path(os.environ["WINDIR"]) / "Fonts" if "WINDIR" in os.environ else None
@@ -61,7 +61,7 @@ class Rect:
     def y2(self) -> int:
         return self.y + self.h
 
-    def inset(self, dx: int, dy: int | None = None) -> "Rect":
+    def inset(self, dx: int, dy: int | None = None) -> Rect:
         if dy is None:
             dy = dx
         return Rect(self.x + dx, self.y + dy, self.w - dx * 2, self.h - dy * 2)
@@ -73,7 +73,7 @@ class Rect:
         height: int,
         left_pad: int = 0,
         right_pad: int | None = None,
-    ) -> "Rect":
+    ) -> Rect:
         if right_pad is None:
             right_pad = left_pad
         return Rect(self.x + left_pad, self.y + top_pad, self.w - left_pad - right_pad, height)
@@ -85,7 +85,7 @@ class Rect:
         gap: int = 0,
         left_pad: int = 0,
         right_pad: int | None = None,
-    ) -> "Rect":
+    ) -> Rect:
         if right_pad is None:
             right_pad = left_pad
         return Rect(self.x + left_pad, self.y - gap - height, self.w - left_pad - right_pad, height)
@@ -302,7 +302,7 @@ def detect_id_slots(page_gray: np.ndarray, rect: Rect) -> list[Rect]:
 
     boundaries = [0]
     for left, right in ranges:
-        center = int(round((left + right) / 2))
+        center = round((left + right) / 2)
         if 4 < center < crop.shape[1] - 5:
             boundaries.append(center)
     boundaries.append(crop.shape[1] - 1)
@@ -314,7 +314,7 @@ def detect_id_slots(page_gray: np.ndarray, rect: Rect) -> list[Rect]:
     digit_top = rect.y + first_guide_row - int(rect.h * 0.34)
     digit_height = int(rect.h * 0.48)
     slots: list[Rect] = []
-    for left, right in zip(boundaries, boundaries[1:]):
+    for left, right in pairwise(boundaries):
         slots.append(Rect(rect.x + left + 3, digit_top, right - left - 6, digit_height))
     return slots
 
@@ -362,7 +362,7 @@ def paste_signature(
     if alpha_bbox:
         signature = signature.crop(alpha_bbox)
 
-    min_signature_width = int(round((overlay.width / 21.0) * min_cm_width))
+    min_signature_width = round((overlay.width / 21.0) * min_cm_width)
     target_width = min(line_rect.w, max(min_signature_width, int(line_rect.w * 0.55)))
     width_scale = target_width / signature.width
     if target_height is None:
@@ -370,8 +370,8 @@ def paste_signature(
     else:
         scale = min(width_scale, target_height / signature.height)
 
-    resized_width = max(1, int(round(signature.width * scale)))
-    resized_height = max(1, int(round(signature.height * scale)))
+    resized_width = max(1, round(signature.width * scale))
+    resized_height = max(1, round(signature.height * scale))
     resized = signature.resize((resized_width, resized_height), Image.Resampling.LANCZOS)
     x = int(line_rect.x + (line_rect.w - resized_width) / 2)
     y = int(line_rect.y - resized_height + y_offset)

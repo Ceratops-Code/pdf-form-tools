@@ -1,11 +1,11 @@
 from pathlib import Path
 
 import numpy as np
-import pdf_form_tools.pdf_form_overlay as overlay
 from PIL import Image, ImageDraw
 from pypdf import PdfReader
 from reportlab.pdfgen import canvas
 
+import pdf_form_tools.pdf_form_overlay as overlay
 from pdf_form_tools import Rect, centered_address_box, detect_id_slots
 
 

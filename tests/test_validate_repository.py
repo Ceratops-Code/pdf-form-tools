@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import scripts.validate_repository as validator
+import scripts.publish_current_version as publisher
 
 
 def test_commands_use_isolated_artifacts_and_preserve_paths_with_spaces(
@@ -161,3 +162,165 @@ def test_successful_build_without_artifacts_fails_before_twine(
     assert "No package artifacts were created." in evidence_path.read_text(
         encoding="utf-8"
     )
+
+
+def _configure_release_project(tmp_path: Path, monkeypatch) -> Path:
+    repository = tmp_path / "release repository with spaces"
+    repository.mkdir()
+    (repository / "pyproject.toml").write_text(
+        '[project]\nname = "pdf-form-tools"\nversion = "2.2.0"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(publisher, "REPOSITORY_ROOT", repository)
+    return repository
+
+
+def test_release_preflight_constructs_checks_without_push(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    repository = _configure_release_project(tmp_path, monkeypatch)
+    head = "a" * 40
+    run = Mock(
+        side_effect=[
+            subprocess.CompletedProcess([], 0, stdout=""),
+            subprocess.CompletedProcess([], 0, stdout=f"{head}\n"),
+            subprocess.CompletedProcess([], 0, stdout=""),
+        ]
+    )
+    registry_check = Mock(return_value=False)
+    monkeypatch.setattr(publisher.subprocess, "run", run)
+    monkeypatch.setattr(publisher, "_version_is_published", registry_check)
+
+    exit_code = publisher.main(["--check-only"])
+
+    assert exit_code == 0
+    assert capsys.readouterr().out == "OK\n"
+    assert [call.args[0] for call in run.call_args_list] == [
+        ["git", "status", "--porcelain"],
+        ["git", "rev-parse", "HEAD"],
+        [
+            "git",
+            "ls-remote",
+            "--tags",
+            "--refs",
+            "origin",
+            "refs/tags/v2.2.0",
+        ],
+    ]
+    assert all(call.kwargs["cwd"] == repository for call in run.call_args_list)
+    registry_check.assert_called_once_with("pdf-form-tools", "2.2.0")
+
+
+def test_release_pushes_exact_head_to_new_version_tag(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    _configure_release_project(tmp_path, monkeypatch)
+    head = "b" * 40
+    run = Mock(
+        side_effect=[
+            subprocess.CompletedProcess([], 0, stdout=""),
+            subprocess.CompletedProcess([], 0, stdout=f"{head}\n"),
+            subprocess.CompletedProcess([], 0, stdout=""),
+            subprocess.CompletedProcess([], 0, stdout=""),
+        ]
+    )
+    monkeypatch.setattr(publisher.subprocess, "run", run)
+    monkeypatch.setattr(publisher, "_version_is_published", Mock(return_value=False))
+
+    exit_code = publisher.main([])
+
+    assert exit_code == 0
+    assert capsys.readouterr().out == "OK\n"
+    assert run.call_args_list[-1].args[0] == [
+        "git",
+        "push",
+        "origin",
+        f"{head}:refs/tags/v2.2.0",
+    ]
+
+
+def test_release_retry_accepts_only_the_same_remote_commit(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    _configure_release_project(tmp_path, monkeypatch)
+    head = "c" * 40
+    run = Mock(
+        side_effect=[
+            subprocess.CompletedProcess([], 0, stdout=""),
+            subprocess.CompletedProcess([], 0, stdout=f"{head}\n"),
+            subprocess.CompletedProcess(
+                [],
+                0,
+                stdout=f"{head}\trefs/tags/v2.2.0\n",
+            ),
+        ]
+    )
+    registry_check = Mock()
+    monkeypatch.setattr(publisher.subprocess, "run", run)
+    monkeypatch.setattr(publisher, "_version_is_published", registry_check)
+
+    exit_code = publisher.main([])
+
+    assert exit_code == 0
+    assert capsys.readouterr().out == "OK\n"
+    assert run.call_count == 3
+    registry_check.assert_not_called()
+
+
+def test_release_rejects_existing_pypi_version_with_compact_json(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    _configure_release_project(tmp_path, monkeypatch)
+    head = "d" * 40
+    run = Mock(
+        side_effect=[
+            subprocess.CompletedProcess([], 0, stdout=""),
+            subprocess.CompletedProcess([], 0, stdout=f"{head}\n"),
+            subprocess.CompletedProcess([], 0, stdout=""),
+        ]
+    )
+    monkeypatch.setattr(publisher.subprocess, "run", run)
+    monkeypatch.setattr(publisher, "_version_is_published", Mock(return_value=True))
+
+    exit_code = publisher.main([])
+
+    assert exit_code == 1
+    assert json.loads(capsys.readouterr().out) == {
+        "stage": "pypi_version",
+        "exit_code": 1,
+        "tag": "v2.2.0",
+    }
+    assert run.call_count == 3
+
+
+def test_release_rejects_conflicting_remote_tag(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    _configure_release_project(tmp_path, monkeypatch)
+    head = "e" * 40
+    other = "f" * 40
+    run = Mock(
+        side_effect=[
+            subprocess.CompletedProcess([], 0, stdout=""),
+            subprocess.CompletedProcess([], 0, stdout=f"{head}\n"),
+            subprocess.CompletedProcess(
+                [],
+                0,
+                stdout=f"{other}\trefs/tags/v2.2.0\n",
+            ),
+        ]
+    )
+    registry_check = Mock()
+    monkeypatch.setattr(publisher.subprocess, "run", run)
+    monkeypatch.setattr(publisher, "_version_is_published", registry_check)
+
+    exit_code = publisher.main([])
+
+    assert exit_code == 1
+    assert json.loads(capsys.readouterr().out) == {
+        "stage": "tag_conflict",
+        "exit_code": 1,
+        "tag": "v2.2.0",
+    }
+    assert run.call_count == 3
+    registry_check.assert_not_called()

@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.2.0
+
+- Export `detect_id_slots()` from the package's public API and document the overlay helpers.
+- Resolve Windows fonts through `WINDIR` instead of a hard-coded system path.
+- Use one isolated repository-validation command locally and across the CI matrix.
+- Add retry-safe release preflight and tag publication for the lifecycle ship flow.
+
 ## 2.1.0
 
 - Add reusable `Rect.band()` and `Rect.above()` helpers for shared form geometry.

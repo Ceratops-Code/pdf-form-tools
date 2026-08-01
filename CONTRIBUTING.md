@@ -18,6 +18,15 @@ Set `BUILD_DIR` to a temporary path that does not exist and `EVIDENCE_FILE` to
 the file that should receive complete command output. The runner prints `OK` on
 success or compact JSON identifying the failed stage and evidence file.
 
+## Releases
+
+Document the release in `CHANGELOG.md` and set the next semantic version in
+`pyproject.toml` before promotion. The deployment preflight rejects an existing
+PyPI version or a conflicting remote tag. After shipping, `after_ship` pushes
+the exact synchronized commit to its `v<version>` tag, which triggers the
+existing trusted-publishing workflow. After that workflow succeeds, create the
+GitHub release from the matching changelog entry.
+
 ## Pull requests
 
 - Keep changes scoped and explain the user-visible impact.

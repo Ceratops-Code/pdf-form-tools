@@ -36,10 +36,11 @@ merge_overlay_pdf(source_pdf, Path("overlay-page1.png"), Path("form-filled.pdf")
 
 ```bash
 python -m pip install -e ".[dev]"
-python -m ruff check .
-python -m pytest -W error::DeprecationWarning
-python -m build
+python scripts/validate_repository.py --build-dir "$BUILD_DIR" --evidence-file "$EVIDENCE_FILE"
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for validation path requirements and
+the release flow.
 
 ## Scope
 

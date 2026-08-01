@@ -1,0 +1,15 @@
+version: 1
+operations:
+  preflight:
+    steps:
+      - id: check-release-version
+        run:
+          - python
+          - scripts/publish_current_version.py
+          - --check-only
+  after_ship:
+    steps:
+      - id: publish-release-tag
+        run:
+          - python
+          - scripts/publish_current_version.py

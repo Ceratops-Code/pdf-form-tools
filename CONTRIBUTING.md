@@ -11,10 +11,12 @@ python -m pip install -e ".[dev]"
 Run these before opening a pull request:
 
 ```bash
-python -m ruff check .
-python -m pytest -W error::DeprecationWarning
-python -m build
+python scripts/validate_repository.py --build-dir "$BUILD_DIR" --evidence-file "$EVIDENCE_FILE"
 ```
+
+Set `BUILD_DIR` to a temporary path that does not exist and `EVIDENCE_FILE` to
+the file that should receive complete command output. The runner prints `OK` on
+success or compact JSON identifying the failed stage and evidence file.
 
 ## Pull requests
 

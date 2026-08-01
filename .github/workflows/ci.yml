@@ -30,11 +30,8 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
         run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
-      - name: Ruff
-        run: python -m ruff check .
-      - name: Pytest
-        run: python -m pytest -W error::DeprecationWarning
-      - name: Build package
-        run: python -m build
-      - name: Check package metadata
-        run: python -m twine check dist/*
+      - name: Validate repository
+        run: >-
+          python scripts/validate_repository.py
+          --build-dir "${{ runner.temp }}/pdf-form-tools-validation-dist"
+          --evidence-file "${{ runner.temp }}/pdf-form-tools-validation.log"

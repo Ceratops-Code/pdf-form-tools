@@ -17,7 +17,6 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import TextIO
 
-
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 INTERNAL_ERROR = 2
 

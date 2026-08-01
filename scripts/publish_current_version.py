@@ -22,7 +22,6 @@ import urllib.request
 from collections.abc import Sequence
 from pathlib import Path
 
-
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 REMOTE = "origin"
 INTERNAL_ERROR = 2

@@ -6,8 +6,8 @@ import sys
 from pathlib import Path
 from unittest.mock import Mock
 
-import scripts.validate_repository as validator
 import scripts.publish_current_version as publisher
+import scripts.validate_repository as validator
 
 
 def test_commands_use_isolated_artifacts_and_preserve_paths_with_spaces(

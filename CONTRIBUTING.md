@@ -24,8 +24,10 @@ Document the release in `CHANGELOG.md` and set the next semantic version in
 `pyproject.toml` before promotion. The deployment preflight rejects an existing
 PyPI version or a conflicting remote tag. After shipping, `after_ship` pushes
 the exact synchronized commit to its `v<version>` tag, which triggers the
-existing trusted-publishing workflow. After that workflow succeeds, create the
-GitHub release from the matching changelog entry.
+existing trusted-publishing workflow. The build job generates and verifies
+GitHub attestations for both distributions before handing them to the publish
+job. After that workflow succeeds, create the GitHub release from the matching
+changelog entry.
 
 ## Pull requests
 

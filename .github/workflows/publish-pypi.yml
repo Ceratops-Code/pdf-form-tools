@@ -12,6 +12,10 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -25,6 +29,17 @@ jobs:
         run: python -m build
       - name: Check distributions
         run: python -m twine check dist/*
+      - name: Attest distributions
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: dist/*
+      - name: Verify distribution attestations
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for artifact in dist/*; do
+            gh attestation verify "$artifact" --repo "$GITHUB_REPOSITORY"
+          done
       - name: Upload distributions
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

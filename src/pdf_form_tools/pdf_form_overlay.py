@@ -3,23 +3,132 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass
 from functools import lru_cache
 from io import BytesIO
 from itertools import pairwise
 from pathlib import Path
+from typing import Any, Literal
 
 import cv2
 import fitz
 import numpy as np
 from bidi.algorithm import get_display
+from jsonschema import Draft202012Validator
 from PIL import Image, ImageDraw, ImageFont
 from pypdf import PdfReader, PdfWriter
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
 TEXT_COLOR = (20, 20, 20, 255)
+A4_SIZE_CM = (21.0, 29.7)
+FORM_RECIPE_SCHEMA = "pdf-form-tools.form-recipe.v1"
 WINDOWS_FONT_DIR = Path(os.environ["WINDIR"]) / "Fonts" if "WINDIR" in os.environ else None
+
+_RECT_SCHEMA = {
+    "type": "array",
+    "prefixItems": [
+        {"type": "integer", "minimum": 0},
+        {"type": "integer", "minimum": 0},
+        {"type": "integer", "minimum": 1},
+        {"type": "integer", "minimum": 1},
+    ],
+    "items": False,
+    "minItems": 4,
+    "maxItems": 4,
+}
+_POSITIVE_NUMBER_SCHEMA = {"type": "number", "exclusiveMinimum": 0}
+FORM_RECIPE_JSON_SCHEMA: dict[str, Any] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["schema", "template", "render", "fields", "signatures"],
+    "properties": {
+        "schema": {"const": FORM_RECIPE_SCHEMA},
+        "template": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["id", "version"],
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9_-]*$",
+                },
+                "version": {"type": "integer", "minimum": 1},
+            },
+        },
+        "render": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["page_index", "scale", "expected_size", "page_size_cm"],
+            "properties": {
+                "page_index": {"type": "integer", "minimum": 0},
+                "scale": {"type": "integer", "minimum": 1},
+                "expected_size": {
+                    "type": "array",
+                    "prefixItems": [
+                        {"type": "integer", "minimum": 1},
+                        {"type": "integer", "minimum": 1},
+                    ],
+                    "items": False,
+                    "minItems": 2,
+                    "maxItems": 2,
+                },
+                "page_size_cm": {
+                    "type": "array",
+                    "prefixItems": [
+                        _POSITIVE_NUMBER_SCHEMA,
+                        _POSITIVE_NUMBER_SCHEMA,
+                    ],
+                    "items": False,
+                    "minItems": 2,
+                    "maxItems": 2,
+                },
+            },
+        },
+        "fields": {
+            "type": "object",
+            "additionalProperties": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["value", "rect", "align", "max_size", "min_size"],
+                "properties": {
+                    "value": {"type": "string"},
+                    "rect": _RECT_SCHEMA,
+                    "align": {"enum": ["left", "center", "right"]},
+                    "max_size": {"type": "integer", "minimum": 1},
+                    "min_size": {"type": "integer", "minimum": 1},
+                    "bold": {"type": "boolean"},
+                },
+            },
+        },
+        "signatures": {
+            "type": "object",
+            "additionalProperties": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["asset", "line_rect", "horizontal_align"],
+                "properties": {
+                    "asset": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "^[^/\\\\]+$",
+                    },
+                    "line_rect": _RECT_SCHEMA,
+                    "horizontal_align": {"enum": ["left", "center", "right"]},
+                    "min_cm_width": _POSITIVE_NUMBER_SCHEMA,
+                    "target_height": {"type": "integer", "minimum": 1},
+                    "max_extent_cm": _POSITIVE_NUMBER_SCHEMA,
+                    "downward_offset_cm": {"type": "number", "minimum": 0},
+                    "y_offset": {"type": "integer"},
+                },
+            },
+        },
+    },
+}
+_FORM_RECIPE_VALIDATOR = Draft202012Validator(FORM_RECIPE_JSON_SCHEMA)
 
 
 def windows_font(name: str) -> list[Path]:
@@ -354,28 +463,66 @@ def paste_signature(
     *,
     min_cm_width: float = 2.0,
     target_height: int | None = None,
+    max_extent_cm: float | None = None,
+    page_size_cm: tuple[float, float] = A4_SIZE_CM,
+    horizontal_align: Literal["left", "center", "right"] = "center",
+    downward_offset_cm: float | None = None,
     y_offset: int = 45,
-) -> None:
-    """Scale and alpha-composite a signature above a form line."""
+) -> Rect:
+    """Scale and place a visible signature above a form line.
+
+    ``max_extent_cm`` preserves aspect ratio and stops scaling when either the
+    cropped width or height reaches the requested physical size. Existing
+    callers retain line-width sizing when it is omitted. ``downward_offset_cm``
+    moves the signature's bottom edge that physical distance below the line and
+    supersedes the legacy pixel ``y_offset`` when supplied. The returned
+    rectangle is the placed signature's pixel bounds for collision checks.
+    """
 
     alpha_bbox = signature.getchannel("A").getbbox()
     if alpha_bbox:
         signature = signature.crop(alpha_bbox)
 
-    min_signature_width = round((overlay.width / 21.0) * min_cm_width)
-    target_width = min(line_rect.w, max(min_signature_width, int(line_rect.w * 0.55)))
-    width_scale = target_width / signature.width
-    if target_height is None:
-        scale = width_scale
+    if horizontal_align not in {"left", "center", "right"}:
+        raise ValueError(f"Unsupported horizontal alignment: {horizontal_align}")
+
+    if max_extent_cm is not None:
+        page_width_cm, page_height_cm = page_size_cm
+        if max_extent_cm <= 0 or page_width_cm <= 0 or page_height_cm <= 0:
+            raise ValueError("Physical signature and page dimensions must be positive.")
+        max_width = (overlay.width / page_width_cm) * max_extent_cm
+        max_height = (overlay.height / page_height_cm) * max_extent_cm
+        scale = min(max_width / signature.width, max_height / signature.height)
+        if target_height is not None:
+            scale = min(scale, target_height / signature.height)
     else:
-        scale = min(width_scale, target_height / signature.height)
+        min_signature_width = round((overlay.width / page_size_cm[0]) * min_cm_width)
+        target_width = min(line_rect.w, max(min_signature_width, int(line_rect.w * 0.55)))
+        width_scale = target_width / signature.width
+        if target_height is None:
+            scale = width_scale
+        else:
+            scale = min(width_scale, target_height / signature.height)
 
     resized_width = max(1, round(signature.width * scale))
     resized_height = max(1, round(signature.height * scale))
     resized = signature.resize((resized_width, resized_height), Image.Resampling.LANCZOS)
-    x = int(line_rect.x + (line_rect.w - resized_width) / 2)
-    y = int(line_rect.y - resized_height + y_offset)
+    if horizontal_align == "left":
+        x = line_rect.x
+    elif horizontal_align == "right":
+        x = line_rect.x2 - resized_width
+    else:
+        x = int(line_rect.x + (line_rect.w - resized_width) / 2)
+    if downward_offset_cm is None:
+        vertical_offset = y_offset
+    else:
+        page_height_cm = page_size_cm[1]
+        if downward_offset_cm < 0 or page_height_cm <= 0:
+            raise ValueError("Physical downward offset must be non-negative.")
+        vertical_offset = round((overlay.height / page_height_cm) * downward_offset_cm)
+    y = int(line_rect.y - resized_height + vertical_offset)
     overlay.alpha_composite(resized, (x, y))
+    return Rect(x, y, resized_width, resized_height)
 
 
 def render_pdf_page(pdf_path: Path, page_index: int, scale: int, out_path: Path) -> Image.Image:
@@ -416,3 +563,172 @@ def merge_overlay_pdf(src_pdf: Path, overlay_png: Path, out_pdf: Path) -> None:
 
     with out_pdf.open("wb") as handle:
         writer.write(handle)
+
+
+def _recipe_rect(value: list[int]) -> Rect:
+    return Rect(value[0], value[1], value[2], value[3])
+
+
+def _require_rect_on_page(rect: Rect, page_size: tuple[int, int], label: str) -> None:
+    if rect.x2 > page_size[0] or rect.y2 > page_size[1]:
+        raise ValueError(f"{label} extends outside expected page size {page_size}: {rect}")
+
+
+def _rectangles_overlap(first: Rect, second: Rect) -> bool:
+    return not (
+        first.x2 <= second.x
+        or second.x2 <= first.x
+        or first.y2 <= second.y
+        or second.y2 <= first.y
+    )
+
+
+def validate_form_recipe(recipe: Mapping[str, Any]) -> dict[str, Any]:
+    """Return an isolated, validated generic form recipe.
+
+    JSON Schema owns the closed structural contract. This function adds the
+    geometry and cross-field invariants that are awkward or misleading to
+    encode declaratively. Callers may safely serialize or edit the returned
+    value without mutating their input mapping.
+    """
+
+    normalized = deepcopy(dict(recipe))
+    errors = sorted(
+        _FORM_RECIPE_VALIDATOR.iter_errors(normalized),
+        key=lambda error: tuple(str(part) for part in error.absolute_path),
+    )
+    if errors:
+        error = errors[0]
+        location = ".".join(str(part) for part in error.absolute_path) or "recipe"
+        raise ValueError(f"Invalid form recipe at {location}: {error.message}")
+
+    expected_size = tuple(normalized["render"]["expected_size"])
+    for name, field in normalized["fields"].items():
+        if field["max_size"] < field["min_size"]:
+            raise ValueError(f"Field {name} max_size must be at least min_size.")
+        _require_rect_on_page(
+            _recipe_rect(field["rect"]),
+            expected_size,
+            f"Field {name} rect",
+        )
+
+    for name, signature in normalized["signatures"].items():
+        asset = signature["asset"]
+        if Path(asset).name != asset or asset in {".", ".."}:
+            raise ValueError(f"Signature {name} asset must be one filename.")
+        _require_rect_on_page(
+            _recipe_rect(signature["line_rect"]),
+            expected_size,
+            f"Signature {name} line_rect",
+        )
+    return normalized
+
+
+def _draw_validated_form_recipe(
+    source_image: Image.Image,
+    recipe: Mapping[str, Any],
+    signatures_dir: Path,
+) -> Image.Image:
+    expected_size = tuple(recipe["render"]["expected_size"])
+    if source_image.size != expected_size:
+        raise RuntimeError(
+            f"Unexpected template render size {source_image.size}; expected {expected_size}."
+        )
+
+    form_overlay = Image.new("RGBA", source_image.size, (255, 255, 255, 0))
+    draw = ImageDraw.Draw(form_overlay)
+    for name, field in recipe["fields"].items():
+        draw_text(
+            draw,
+            field["value"],
+            _recipe_rect(field["rect"]),
+            align=field["align"],
+            max_size=field["max_size"],
+            min_size=field["min_size"],
+            bold=field.get("bold", False),
+        )
+
+    page_size_cm = tuple(float(value) for value in recipe["render"]["page_size_cm"])
+    placed: dict[str, Rect] = {}
+    for name, signature in recipe["signatures"].items():
+        asset_path = signatures_dir / signature["asset"]
+        try:
+            with Image.open(asset_path) as source_signature:
+                signature_image = source_signature.convert("RGBA")
+        except OSError as error:
+            raise RuntimeError(
+                f"Could not load signature asset {signature['asset']!r}: {error}"
+            ) from error
+
+        bounds = paste_signature(
+            form_overlay,
+            signature_image,
+            _recipe_rect(signature["line_rect"]),
+            min_cm_width=float(signature.get("min_cm_width", 2.0)),
+            target_height=signature.get("target_height"),
+            max_extent_cm=signature.get("max_extent_cm"),
+            page_size_cm=page_size_cm,
+            horizontal_align=signature["horizontal_align"],
+            downward_offset_cm=signature.get("downward_offset_cm"),
+            y_offset=signature.get("y_offset", 45),
+        )
+        if bounds.x < 0 or bounds.y < 0 or bounds.x2 > source_image.width or bounds.y2 > source_image.height:
+            raise RuntimeError(f"Signature {name} placement extends outside the page: {bounds}.")
+        for field_name, field in recipe["fields"].items():
+            field_bounds = _recipe_rect(field["rect"])
+            if _rectangles_overlap(bounds, field_bounds):
+                raise RuntimeError(
+                    f"Signature {name} overlaps text field {field_name}: "
+                    f"signature={bounds}, field={field_bounds}."
+                )
+        for other_name, other_bounds in placed.items():
+            if _rectangles_overlap(bounds, other_bounds):
+                raise RuntimeError(
+                    "Signature placements overlap: "
+                    f"{other_name}={other_bounds}, {name}={bounds}."
+                )
+        placed[name] = bounds
+    return form_overlay
+
+
+def draw_form_recipe(
+    source_image: Image.Image,
+    recipe: Mapping[str, Any],
+    signatures_dir: Path,
+) -> Image.Image:
+    """Draw one self-contained form recipe onto a transparent overlay."""
+
+    normalized = validate_form_recipe(recipe)
+    return _draw_validated_form_recipe(source_image, normalized, signatures_dir)
+
+
+def render_form_recipe(
+    source_pdf: Path,
+    recipe: Mapping[str, Any],
+    signatures_dir: Path,
+    *,
+    source_render_path: Path,
+    overlay_path: Path,
+) -> dict[str, Any]:
+    """Validate a recipe and write its source render and transparent overlay.
+
+    The caller owns both output paths and their cleanup. This helper never
+    modifies the source PDF and does not merge or deliver a final document;
+    callers can retry their own output fallback around ``merge_overlay_pdf``.
+    """
+
+    normalized = validate_form_recipe(recipe)
+    render = normalized["render"]
+    source_image = render_pdf_page(
+        source_pdf,
+        render["page_index"],
+        render["scale"],
+        source_render_path,
+    )
+    form_overlay = _draw_validated_form_recipe(
+        source_image,
+        normalized,
+        signatures_dir,
+    )
+    form_overlay.save(overlay_path)
+    return normalized

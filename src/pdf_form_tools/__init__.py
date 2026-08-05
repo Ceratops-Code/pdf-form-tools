@@ -1,31 +1,41 @@
 """Public geometry, detection, drawing, and PDF-overlay helpers."""
 
 from .pdf_form_overlay import (
+    FORM_RECIPE_JSON_SCHEMA,
+    FORM_RECIPE_SCHEMA,
     Rect,
     centered_address_box,
     detect_id_slots,
     detect_lines,
     detect_square_boxes,
     draw_check,
+    draw_form_recipe,
     draw_id_number,
     draw_text,
     merge_overlay_pdf,
     paste_signature,
+    render_form_recipe,
     render_pdf_page,
+    validate_form_recipe,
     writable_box,
 )
 
 __all__ = [
+    "FORM_RECIPE_JSON_SCHEMA",
+    "FORM_RECIPE_SCHEMA",
     "Rect",
     "centered_address_box",
     "detect_id_slots",
     "detect_lines",
     "detect_square_boxes",
     "draw_check",
+    "draw_form_recipe",
     "draw_id_number",
     "draw_text",
     "merge_overlay_pdf",
     "paste_signature",
+    "render_form_recipe",
     "render_pdf_page",
+    "validate_form_recipe",
     "writable_box",
 ]

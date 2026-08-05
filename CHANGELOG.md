@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+## 2.3.0
+
+- Add a closed JSON form-recipe contract with generic validation, text and signature rendering, collision checks, and verification-overlay generation.
+- Export the generic recipe schema and renderer through the public package API.
+- Size signatures by physical dimensions, apply an optional physical downward offset, align them horizontally, and return their placed bounds for collision checks.
+
 ## 2.2.0
 
 - Export `detect_id_slots()` from the package's public API and document the overlay helpers.

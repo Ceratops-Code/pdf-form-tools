@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pdf-form-tools"
-version = "2.2.0"
+version = "2.3.0"
 description = "Template-aware tools for filling scanned PDF forms with visual verification"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -26,6 +26,7 @@ classifiers = [
 ]
 urls = { Homepage = "https://github.com/ceratops-code/pdf-form-tools", Repository = "https://github.com/ceratops-code/pdf-form-tools", Issues = "https://github.com/ceratops-code/pdf-form-tools/issues", Changelog = "https://github.com/ceratops-code/pdf-form-tools/releases" }
 dependencies = [
+  "jsonschema>=4.23",
   "numpy",
   "opencv-python-headless",
   "pymupdf",

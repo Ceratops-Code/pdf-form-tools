@@ -1,12 +1,36 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 from PIL import Image, ImageDraw
 from pypdf import PdfReader
 from reportlab.pdfgen import canvas
 
 import pdf_form_tools.pdf_form_overlay as overlay
 from pdf_form_tools import Rect, centered_address_box, detect_id_slots
+
+
+def _generic_recipe(*, signatures: dict | None = None) -> dict:
+    return {
+        "schema": overlay.FORM_RECIPE_SCHEMA,
+        "template": {"id": "test_form", "version": 1},
+        "render": {
+            "page_index": 0,
+            "scale": 1,
+            "expected_size": [200, 200],
+            "page_size_cm": [20.0, 20.0],
+        },
+        "fields": {
+            "name": {
+                "value": "Emily",
+                "rect": [20, 30, 120, 30],
+                "align": "center",
+                "max_size": 24,
+                "min_size": 12,
+            }
+        },
+        "signatures": signatures or {},
+    }
 
 
 def test_rect_inset() -> None:
@@ -249,3 +273,71 @@ def test_merge_overlay_pdf_preserves_pages_and_renders(tmp_path: Path) -> None:
     assert len(PdfReader(str(output_pdf)).pages) == 2
     assert rendered.size == (200, 200)
     assert rendered_png.exists()
+
+
+def test_validate_form_recipe_rejects_signature_path_traversal() -> None:
+    recipe = _generic_recipe(
+        signatures={
+            "parent": {
+                "asset": "../signature.png",
+                "line_rect": [20, 150, 100, 2],
+                "horizontal_align": "left",
+            }
+        }
+    )
+
+    with pytest.raises(ValueError, match="asset"):
+        overlay.validate_form_recipe(recipe)
+
+
+def test_draw_form_recipe_rejects_overlapping_signatures(tmp_path: Path) -> None:
+    signature_path = tmp_path / "signature.png"
+    Image.new("RGBA", (40, 20), (0, 0, 0, 255)).save(signature_path)
+    signature = {
+        "asset": signature_path.name,
+        "line_rect": [20, 150, 100, 2],
+        "horizontal_align": "left",
+        "max_extent_cm": 3.0,
+    }
+    recipe = _generic_recipe(signatures={"first": signature, "second": signature})
+
+    with pytest.raises(RuntimeError, match="overlap"):
+        overlay.draw_form_recipe(
+            Image.new("RGB", (200, 200), "white"),
+            recipe,
+            tmp_path,
+        )
+
+
+def test_render_form_recipe_writes_generic_overlay(tmp_path: Path) -> None:
+    source_pdf = tmp_path / "source.pdf"
+    source_render = tmp_path / "source.png"
+    overlay_png = tmp_path / "overlay.png"
+    signature_path = tmp_path / "signature.png"
+
+    pdf = canvas.Canvas(str(source_pdf), pagesize=(200, 200))
+    pdf.drawString(20, 100, "source")
+    pdf.save()
+    Image.new("RGBA", (40, 20), (0, 0, 0, 255)).save(signature_path)
+    recipe = _generic_recipe(
+        signatures={
+            "parent": {
+                "asset": signature_path.name,
+                "line_rect": [20, 150, 100, 2],
+                "horizontal_align": "left",
+                "max_extent_cm": 3.0,
+            }
+        }
+    )
+
+    normalized = overlay.render_form_recipe(
+        source_pdf,
+        recipe,
+        tmp_path,
+        source_render_path=source_render,
+        overlay_path=overlay_png,
+    )
+
+    assert normalized == recipe
+    assert Image.open(source_render).size == (200, 200)
+    assert Image.open(overlay_png).getchannel("A").getbbox() is not None

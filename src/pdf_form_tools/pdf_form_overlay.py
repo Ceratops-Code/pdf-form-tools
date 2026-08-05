@@ -674,6 +674,13 @@ def _draw_validated_form_recipe(
         )
         if bounds.x < 0 or bounds.y < 0 or bounds.x2 > source_image.width or bounds.y2 > source_image.height:
             raise RuntimeError(f"Signature {name} placement extends outside the page: {bounds}.")
+        for field_name, field in recipe["fields"].items():
+            field_bounds = _recipe_rect(field["rect"])
+            if _rectangles_overlap(bounds, field_bounds):
+                raise RuntimeError(
+                    f"Signature {name} overlaps text field {field_name}: "
+                    f"signature={bounds}, field={field_bounds}."
+                )
         for other_name, other_bounds in placed.items():
             if _rectangles_overlap(bounds, other_bounds):
                 raise RuntimeError(

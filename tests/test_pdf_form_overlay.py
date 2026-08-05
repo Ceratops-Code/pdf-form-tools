@@ -150,6 +150,24 @@ def test_paste_signature_right_aligns_physical_portrait_signature() -> None:
     assert page.getchannel("A").getbbox() == (1350, 510, 1500, 810)
 
 
+def test_paste_signature_uses_physical_downward_offset() -> None:
+    page = Image.new("RGBA", (2100, 2970), (0, 0, 0, 0))
+    signature = Image.new("RGBA", (400, 200), (0, 0, 0, 255))
+
+    placed = overlay.paste_signature(
+        page,
+        signature,
+        Rect(100, 500, 500, 10),
+        max_extent_cm=3.0,
+        horizontal_align="left",
+        downward_offset_cm=1.0,
+        y_offset=999,
+    )
+
+    assert placed == Rect(100, 450, 300, 150)
+    assert page.getchannel("A").getbbox() == (100, 450, 400, 600)
+
+
 def test_detect_id_slots_follows_printed_guides() -> None:
     page_gray = np.full((120, 920), 255, dtype=np.uint8)
     rect = Rect(10, 10, 900, 90)

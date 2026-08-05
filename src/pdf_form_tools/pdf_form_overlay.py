@@ -359,14 +359,17 @@ def paste_signature(
     max_extent_cm: float | None = None,
     page_size_cm: tuple[float, float] = A4_SIZE_CM,
     horizontal_align: Literal["left", "center", "right"] = "center",
+    downward_offset_cm: float | None = None,
     y_offset: int = 45,
 ) -> Rect:
     """Scale and place a visible signature above a form line.
 
     ``max_extent_cm`` preserves aspect ratio and stops scaling when either the
     cropped width or height reaches the requested physical size. Existing
-    callers retain line-width sizing when it is omitted. The returned rectangle
-    is the placed signature's pixel bounds for caller-level collision checks.
+    callers retain line-width sizing when it is omitted. ``downward_offset_cm``
+    moves the signature's bottom edge that physical distance below the line and
+    supersedes the legacy pixel ``y_offset`` when supplied. The returned
+    rectangle is the placed signature's pixel bounds for collision checks.
     """
 
     alpha_bbox = signature.getchannel("A").getbbox()
@@ -403,7 +406,14 @@ def paste_signature(
         x = line_rect.x2 - resized_width
     else:
         x = int(line_rect.x + (line_rect.w - resized_width) / 2)
-    y = int(line_rect.y - resized_height + y_offset)
+    if downward_offset_cm is None:
+        vertical_offset = y_offset
+    else:
+        page_height_cm = page_size_cm[1]
+        if downward_offset_cm < 0 or page_height_cm <= 0:
+            raise ValueError("Physical downward offset must be non-negative.")
+        vertical_offset = round((overlay.height / page_height_cm) * downward_offset_cm)
+    y = int(line_rect.y - resized_height + vertical_offset)
     overlay.alpha_composite(resized, (x, y))
     return Rect(x, y, resized_width, resized_height)
 

@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Size signatures by a physical maximum extent, align them horizontally, and return their placed bounds for collision checks.
+- Size signatures by physical dimensions, apply an optional physical downward offset, align them horizontally, and return their placed bounds for collision checks.
 
 ## 2.2.0
 

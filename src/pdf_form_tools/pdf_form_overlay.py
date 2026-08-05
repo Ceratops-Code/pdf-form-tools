@@ -8,6 +8,7 @@ from functools import lru_cache
 from io import BytesIO
 from itertools import pairwise
 from pathlib import Path
+from typing import Literal
 
 import cv2
 import fitz
@@ -19,6 +20,7 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
 TEXT_COLOR = (20, 20, 20, 255)
+A4_SIZE_CM = (21.0, 29.7)
 WINDOWS_FONT_DIR = Path(os.environ["WINDIR"]) / "Fonts" if "WINDIR" in os.environ else None
 
 
@@ -354,28 +356,56 @@ def paste_signature(
     *,
     min_cm_width: float = 2.0,
     target_height: int | None = None,
+    max_extent_cm: float | None = None,
+    page_size_cm: tuple[float, float] = A4_SIZE_CM,
+    horizontal_align: Literal["left", "center", "right"] = "center",
     y_offset: int = 45,
-) -> None:
-    """Scale and alpha-composite a signature above a form line."""
+) -> Rect:
+    """Scale and place a visible signature above a form line.
+
+    ``max_extent_cm`` preserves aspect ratio and stops scaling when either the
+    cropped width or height reaches the requested physical size. Existing
+    callers retain line-width sizing when it is omitted. The returned rectangle
+    is the placed signature's pixel bounds for caller-level collision checks.
+    """
 
     alpha_bbox = signature.getchannel("A").getbbox()
     if alpha_bbox:
         signature = signature.crop(alpha_bbox)
 
-    min_signature_width = round((overlay.width / 21.0) * min_cm_width)
-    target_width = min(line_rect.w, max(min_signature_width, int(line_rect.w * 0.55)))
-    width_scale = target_width / signature.width
-    if target_height is None:
-        scale = width_scale
+    if horizontal_align not in {"left", "center", "right"}:
+        raise ValueError(f"Unsupported horizontal alignment: {horizontal_align}")
+
+    if max_extent_cm is not None:
+        page_width_cm, page_height_cm = page_size_cm
+        if max_extent_cm <= 0 or page_width_cm <= 0 or page_height_cm <= 0:
+            raise ValueError("Physical signature and page dimensions must be positive.")
+        max_width = (overlay.width / page_width_cm) * max_extent_cm
+        max_height = (overlay.height / page_height_cm) * max_extent_cm
+        scale = min(max_width / signature.width, max_height / signature.height)
+        if target_height is not None:
+            scale = min(scale, target_height / signature.height)
     else:
-        scale = min(width_scale, target_height / signature.height)
+        min_signature_width = round((overlay.width / page_size_cm[0]) * min_cm_width)
+        target_width = min(line_rect.w, max(min_signature_width, int(line_rect.w * 0.55)))
+        width_scale = target_width / signature.width
+        if target_height is None:
+            scale = width_scale
+        else:
+            scale = min(width_scale, target_height / signature.height)
 
     resized_width = max(1, round(signature.width * scale))
     resized_height = max(1, round(signature.height * scale))
     resized = signature.resize((resized_width, resized_height), Image.Resampling.LANCZOS)
-    x = int(line_rect.x + (line_rect.w - resized_width) / 2)
+    if horizontal_align == "left":
+        x = line_rect.x
+    elif horizontal_align == "right":
+        x = line_rect.x2 - resized_width
+    else:
+        x = int(line_rect.x + (line_rect.w - resized_width) / 2)
     y = int(line_rect.y - resized_height + y_offset)
     overlay.alpha_composite(resized, (x, y))
+    return Rect(x, y, resized_width, resized_height)
 
 
 def render_pdf_page(pdf_path: Path, page_index: int, scale: int, out_path: Path) -> Image.Image:

@@ -116,6 +116,40 @@ def test_paste_signature_preserves_aspect_ratio_when_height_limited() -> None:
     assert page.getchannel("A").getbbox() == (1100, 460, 1200, 510)
 
 
+def test_paste_signature_limits_largest_dimension_to_physical_size() -> None:
+    page = Image.new("RGBA", (2100, 2970), (0, 0, 0, 0))
+    signature = Image.new("RGBA", (400, 200), (0, 0, 0, 255))
+
+    placed = overlay.paste_signature(
+        page,
+        signature,
+        Rect(100, 500, 500, 10),
+        max_extent_cm=3.0,
+        horizontal_align="left",
+        y_offset=10,
+    )
+
+    assert placed == Rect(100, 360, 300, 150)
+    assert page.getchannel("A").getbbox() == (100, 360, 400, 510)
+
+
+def test_paste_signature_right_aligns_physical_portrait_signature() -> None:
+    page = Image.new("RGBA", (2100, 2970), (0, 0, 0, 0))
+    signature = Image.new("RGBA", (200, 400), (0, 0, 0, 255))
+
+    placed = overlay.paste_signature(
+        page,
+        signature,
+        Rect(1000, 800, 500, 10),
+        max_extent_cm=3.0,
+        horizontal_align="right",
+        y_offset=10,
+    )
+
+    assert placed == Rect(1350, 510, 150, 300)
+    assert page.getchannel("A").getbbox() == (1350, 510, 1500, 810)
+
+
 def test_detect_id_slots_follows_printed_guides() -> None:
     page_gray = np.full((120, 920), 255, dtype=np.uint8)
     rect = Rect(10, 10, 900, 90)

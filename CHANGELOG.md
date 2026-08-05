@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Size signatures by a physical maximum extent, align them horizontally, and return their placed bounds for collision checks.
+
 ## 2.2.0
 
 - Export `detect_id_slots()` from the package's public API and document the overlay helpers.

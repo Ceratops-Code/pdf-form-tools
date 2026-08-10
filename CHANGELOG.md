@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 2.4.0
+
 - Add a generic circle-outline primitive and optional recipe-level circle selections.
 
 ## 2.3.0

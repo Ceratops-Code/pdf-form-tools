@@ -362,6 +362,30 @@ def test_draw_form_recipe_rejects_signature_overlapping_field(tmp_path: Path) ->
         )
 
 
+def test_draw_form_recipe_rejects_signature_overlapping_circle(tmp_path: Path) -> None:
+    signature_path = tmp_path / "signature.png"
+    Image.new("RGBA", (40, 20), (0, 0, 0, 255)).save(signature_path)
+    recipe = _generic_recipe(
+        circles={"choice": {"rect": [20, 85, 30, 15], "stroke_width": 3}},
+        signatures={
+            "parent": {
+                "asset": signature_path.name,
+                "line_rect": [20, 100, 100, 2],
+                "horizontal_align": "left",
+                "max_extent_cm": 3.0,
+                "y_offset": 0,
+            }
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="overlaps circle selection choice"):
+        overlay.draw_form_recipe(
+            Image.new("RGB", (200, 200), "white"),
+            recipe,
+            tmp_path,
+        )
+
+
 def test_render_form_recipe_writes_generic_overlay(tmp_path: Path) -> None:
     source_pdf = tmp_path / "source.pdf"
     source_render = tmp_path / "source.png"

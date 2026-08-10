@@ -187,9 +187,9 @@ def test_local_deploy_builds_and_installs_exact_temporary_wheel(
             return subprocess.CompletedProcess(
                 command, 0, stdout="pyproject.toml\0", stderr=""
             )
-        if command[2] == "build":
+        if "wheel" in command:
             source_dir = Path(kwargs["cwd"])
-            output_dir = Path(command[command.index("--outdir") + 1])
+            output_dir = Path(command[command.index("--wheel-dir") + 1])
             wheel = output_dir / "pdf_form_tools-2.4.0-py3-none-any.whl"
             wheel.write_text("wheel", encoding="utf-8")
             (source_dir / "build").mkdir()
@@ -209,10 +209,13 @@ def test_local_deploy_builds_and_installs_exact_temporary_wheel(
         [
             sys.executable,
             "-m",
-            "build",
-            "--wheel",
-            "--outdir",
+            "pip",
+            "--disable-pip-version-check",
+            "wheel",
+            "--no-deps",
+            "--wheel-dir",
             str(output_dir),
+            ".",
         ],
         [
             sys.executable,
@@ -291,8 +294,8 @@ def test_local_deploy_rejects_installed_version_mismatch(
             return subprocess.CompletedProcess(
                 command, 0, stdout="pyproject.toml\0", stderr=""
             )
-        if command[2] == "build":
-            output_dir = Path(command[command.index("--outdir") + 1])
+        if "wheel" in command:
+            output_dir = Path(command[command.index("--wheel-dir") + 1])
             (output_dir / "pdf_form_tools-2.4.0-py3-none-any.whl").write_text(
                 "wheel", encoding="utf-8"
             )

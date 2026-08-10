@@ -731,6 +731,13 @@ def _draw_validated_form_recipe(
                     f"Signature {name} overlaps text field {field_name}: "
                     f"signature={bounds}, field={field_bounds}."
                 )
+        for circle_name, circle in recipe.get("circles", {}).items():
+            circle_bounds = _recipe_rect(circle["rect"])
+            if _rectangles_overlap(bounds, circle_bounds):
+                raise RuntimeError(
+                    f"Signature {name} overlaps circle selection {circle_name}: "
+                    f"signature={bounds}, circle={circle_bounds}."
+                )
         for other_name, other_bounds in placed.items():
             if _rectangles_overlap(bounds, other_bounds):
                 raise RuntimeError(

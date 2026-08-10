@@ -175,10 +175,13 @@ def deploy_local_package() -> None:
                 [
                     sys.executable,
                     "-m",
-                    "build",
-                    "--wheel",
-                    "--outdir",
+                    "pip",
+                    "--disable-pip-version-check",
+                    "wheel",
+                    "--no-deps",
+                    "--wheel-dir",
                     str(output_dir),
+                    ".",
                 ],
                 cwd=source_dir,
             )

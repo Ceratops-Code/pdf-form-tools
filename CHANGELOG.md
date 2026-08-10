@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased
+## 3.0.0
+
+- Replace signature-specific recipe fields and placement APIs with generic
+  deterministic nearby-image placement that never resizes caller-prepared
+  images.
+- Replace address- and identity-specific public helpers with generic band,
+  guided-slot detection, and text-drawing primitives owned by their callers.
+- Advance the closed form-recipe contract to `pdf-form-tools.form-recipe.v2`.
 
 ## 2.4.0
 

@@ -10,8 +10,9 @@ from PIL import Image, ImageDraw
 from pypdf import PdfReader
 from reportlab.pdfgen import canvas
 
+import pdf_form_tools
 import pdf_form_tools.pdf_form_overlay as overlay
-from pdf_form_tools import Rect, centered_address_box, detect_id_slots
+from pdf_form_tools import Rect, detect_guided_slots
 
 
 def test_package_import_does_not_write_to_stdout() -> None:
@@ -42,7 +43,6 @@ def test_pymupdf_dependency_supports_modern_module_name() -> None:
 def _generic_recipe(
     *,
     circles: dict | None = None,
-    signatures: dict | None = None,
 ) -> dict:
     return {
         "schema": overlay.FORM_RECIPE_SCHEMA,
@@ -51,7 +51,6 @@ def _generic_recipe(
             "page_index": 0,
             "scale": 1,
             "expected_size": [200, 200],
-            "page_size_cm": [20.0, 20.0],
         },
         "fields": {
             "name": {
@@ -63,7 +62,6 @@ def _generic_recipe(
             }
         },
         "circles": circles or {},
-        "signatures": signatures or {},
     }
 
 
@@ -81,9 +79,10 @@ def test_rect_above() -> None:
     assert rect.above(height=50, gap=10) == Rect(100, 140, 400, 50)
 
 
-def test_centered_address_box() -> None:
-    rect = Rect(100, 200, 400, 120)
-    assert centered_address_box(rect, top_pad=10, side_pad=20, height=50) == Rect(120, 210, 360, 50)
+def test_public_api_excludes_workflow_specific_semantics() -> None:
+    assert not hasattr(pdf_form_tools, "centered_address_box")
+    assert not hasattr(pdf_form_tools, "detect_id_slots")
+    assert not hasattr(pdf_form_tools, "draw_id_number")
 
 
 def test_load_font_uses_existing_system_font() -> None:
@@ -153,105 +152,65 @@ def test_validate_form_recipe_rejects_circle_without_visible_interior() -> None:
         overlay.validate_form_recipe(recipe)
 
 
-def test_paste_signature_respects_minimum_a4_width_without_height_limit() -> None:
-    page = Image.new("RGBA", (2100, 2970), (0, 0, 0, 0))
-    signature = Image.new("RGBA", (20, 20), (0, 0, 0, 255))
+def test_place_image_near_rect_preserves_size_at_blank_preferred_position() -> None:
+    page = Image.new("RGBA", (200, 200), (0, 0, 0, 0))
+    source = Image.new("RGB", page.size, "white")
+    supplied = Image.new("RGBA", (40, 20), (0, 0, 0, 255))
 
-    overlay.paste_signature(
+    placed = overlay.place_image_near_rect(
+        supplied,
+        Rect(80, 100, 60, 4),
         page,
-        signature,
-        Rect(1000, 500, 300, 10),
-        min_cm_width=2.0,
-        y_offset=10,
+        occupancy_image=source,
     )
 
-    assert page.getchannel("A").getbbox() == (1050, 310, 1250, 510)
+    assert placed == Rect(90, 80, 40, 20)
+    assert page.getchannel("A").getbbox() == (90, 80, 130, 100)
 
 
-def test_paste_signature_does_not_exceed_narrow_line_width() -> None:
-    page = Image.new("RGBA", (2100, 2970), (0, 0, 0, 0))
-    signature = Image.new("RGBA", (20, 20), (0, 0, 0, 255))
+def test_place_image_near_rect_moves_to_lower_occupancy_space_deterministically(
+) -> None:
+    source = Image.new("RGB", (200, 200), "white")
+    ImageDraw.Draw(source).rectangle((90, 80, 129, 99), fill="black")
+    supplied = Image.new("RGBA", (40, 20), (0, 0, 0, 255))
+    placements = []
 
-    overlay.paste_signature(
-        page,
-        signature,
-        Rect(1000, 500, 100, 10),
-        min_cm_width=2.0,
-        y_offset=10,
+    for _ in range(2):
+        page = Image.new("RGBA", source.size, (0, 0, 0, 0))
+        placements.append(
+            overlay.place_image_near_rect(
+                supplied,
+                Rect(80, 100, 60, 4),
+                page,
+                occupancy_image=source,
+            )
+        )
+
+    assert placements[0] == placements[1]
+    assert placements[0] != Rect(90, 80, 40, 20)
+    blocked = Rect(90, 80, 40, 20)
+    placed = placements[0]
+    assert (
+        placed.x2 <= blocked.x
+        or blocked.x2 <= placed.x
+        or placed.y2 <= blocked.y
+        or blocked.y2 <= placed.y
     )
 
-    assert page.getchannel("A").getbbox() == (1000, 410, 1100, 510)
+
+def test_place_image_near_rect_fails_when_protected_regions_block_search() -> None:
+    page = Image.new("RGBA", (80, 80), (0, 0, 0, 0))
+
+    with pytest.raises(RuntimeError, match="protected region"):
+        overlay.place_image_near_rect(
+            Image.new("RGBA", (40, 40), (0, 0, 0, 255)),
+            Rect(20, 40, 40, 4),
+            page,
+            [Rect(0, 0, 80, 80)],
+        )
 
 
-def test_paste_signature_preserves_aspect_ratio_when_height_limited() -> None:
-    page = Image.new("RGBA", (2100, 2970), (0, 0, 0, 0))
-    signature = Image.new("RGBA", (40, 20), (0, 0, 0, 255))
-
-    overlay.paste_signature(
-        page,
-        signature,
-        Rect(1000, 500, 300, 10),
-        min_cm_width=2.0,
-        target_height=50,
-        y_offset=10,
-    )
-
-    assert page.getchannel("A").getbbox() == (1100, 460, 1200, 510)
-
-
-def test_paste_signature_limits_largest_dimension_to_physical_size() -> None:
-    page = Image.new("RGBA", (2100, 2970), (0, 0, 0, 0))
-    signature = Image.new("RGBA", (400, 200), (0, 0, 0, 255))
-
-    placed = overlay.paste_signature(
-        page,
-        signature,
-        Rect(100, 500, 500, 10),
-        max_extent_cm=3.0,
-        horizontal_align="left",
-        y_offset=10,
-    )
-
-    assert placed == Rect(100, 360, 300, 150)
-    assert page.getchannel("A").getbbox() == (100, 360, 400, 510)
-
-
-def test_paste_signature_right_aligns_physical_portrait_signature() -> None:
-    page = Image.new("RGBA", (2100, 2970), (0, 0, 0, 0))
-    signature = Image.new("RGBA", (200, 400), (0, 0, 0, 255))
-
-    placed = overlay.paste_signature(
-        page,
-        signature,
-        Rect(1000, 800, 500, 10),
-        max_extent_cm=3.0,
-        horizontal_align="right",
-        y_offset=10,
-    )
-
-    assert placed == Rect(1350, 510, 150, 300)
-    assert page.getchannel("A").getbbox() == (1350, 510, 1500, 810)
-
-
-def test_paste_signature_uses_physical_downward_offset() -> None:
-    page = Image.new("RGBA", (2100, 2970), (0, 0, 0, 0))
-    signature = Image.new("RGBA", (400, 200), (0, 0, 0, 255))
-
-    placed = overlay.paste_signature(
-        page,
-        signature,
-        Rect(100, 500, 500, 10),
-        max_extent_cm=3.0,
-        horizontal_align="left",
-        downward_offset_cm=1.0,
-        y_offset=999,
-    )
-
-    assert placed == Rect(100, 450, 300, 150)
-    assert page.getchannel("A").getbbox() == (100, 450, 400, 600)
-
-
-def test_detect_id_slots_follows_printed_guides() -> None:
+def test_detect_guided_slots_follows_printed_guides() -> None:
     page_gray = np.full((120, 920), 255, dtype=np.uint8)
     rect = Rect(10, 10, 900, 90)
     lower_start = rect.y + int(rect.h * 0.7)
@@ -259,7 +218,7 @@ def test_detect_id_slots_follows_printed_guides() -> None:
     for offset in range(100, 900, 100):
         page_gray[lower_start : rect.y2, rect.x + offset - 1 : rect.x + offset + 2] = 0
 
-    slots = detect_id_slots(page_gray, rect)
+    slots = detect_guided_slots(page_gray, rect, expected_count=9)
 
     assert len(slots) == 9
     assert slots[0] == Rect(13, 42, 94, 43)
@@ -297,19 +256,6 @@ def test_detect_lines_finds_sorted_lines() -> None:
     assert detected == lines
 
 
-def test_draw_id_number_places_digits_in_detected_slots() -> None:
-    page_gray = np.full((120, 920), 255, dtype=np.uint8)
-    rect = Rect(10, 10, 900, 90)
-    lower_start = rect.y + int(rect.h * 0.7)
-    for offset in range(100, 900, 100):
-        page_gray[lower_start : rect.y2, rect.x + offset - 1 : rect.x + offset + 2] = 0
-    image = Image.new("RGBA", (920, 120), (0, 0, 0, 0))
-
-    overlay.draw_id_number(ImageDraw.Draw(image), page_gray, rect, "123456789")
-
-    assert image.getchannel("A").getbbox() is not None
-
-
 def test_merge_overlay_pdf_preserves_pages_and_renders(tmp_path: Path) -> None:
     source_pdf = tmp_path / "source.pdf"
     overlay_png = tmp_path / "overlay.png"
@@ -334,113 +280,28 @@ def test_merge_overlay_pdf_preserves_pages_and_renders(tmp_path: Path) -> None:
     assert rendered_png.exists()
 
 
-def test_validate_form_recipe_rejects_signature_path_traversal() -> None:
-    recipe = _generic_recipe(
-        signatures={
-            "parent": {
-                "asset": "../signature.png",
-                "line_rect": [20, 150, 100, 2],
-                "horizontal_align": "left",
-            }
-        }
-    )
+def test_validate_form_recipe_rejects_workflow_specific_image_policy() -> None:
+    recipe = _generic_recipe()
+    recipe["signatures"] = {}
 
-    with pytest.raises(ValueError, match="asset"):
+    with pytest.raises(ValueError, match="signatures"):
         overlay.validate_form_recipe(recipe)
-
-
-def test_draw_form_recipe_rejects_overlapping_signatures(tmp_path: Path) -> None:
-    signature_path = tmp_path / "signature.png"
-    Image.new("RGBA", (40, 20), (0, 0, 0, 255)).save(signature_path)
-    signature = {
-        "asset": signature_path.name,
-        "line_rect": [20, 150, 100, 2],
-        "horizontal_align": "left",
-        "max_extent_cm": 3.0,
-    }
-    recipe = _generic_recipe(signatures={"first": signature, "second": signature})
-
-    with pytest.raises(RuntimeError, match="overlap"):
-        overlay.draw_form_recipe(
-            Image.new("RGB", (200, 200), "white"),
-            recipe,
-            tmp_path,
-        )
-
-
-def test_draw_form_recipe_rejects_signature_overlapping_field(tmp_path: Path) -> None:
-    signature_path = tmp_path / "signature.png"
-    Image.new("RGBA", (40, 20), (0, 0, 0, 255)).save(signature_path)
-    recipe = _generic_recipe(
-        signatures={
-            "parent": {
-                "asset": signature_path.name,
-                "line_rect": [20, 55, 100, 2],
-                "horizontal_align": "left",
-                "max_extent_cm": 3.0,
-                "y_offset": 0,
-            }
-        }
-    )
-
-    with pytest.raises(RuntimeError, match="overlaps text field name"):
-        overlay.draw_form_recipe(
-            Image.new("RGB", (200, 200), "white"),
-            recipe,
-            tmp_path,
-        )
-
-
-def test_draw_form_recipe_rejects_signature_overlapping_circle(tmp_path: Path) -> None:
-    signature_path = tmp_path / "signature.png"
-    Image.new("RGBA", (40, 20), (0, 0, 0, 255)).save(signature_path)
-    recipe = _generic_recipe(
-        circles={"choice": {"rect": [20, 85, 30, 15], "stroke_width": 3}},
-        signatures={
-            "parent": {
-                "asset": signature_path.name,
-                "line_rect": [20, 100, 100, 2],
-                "horizontal_align": "left",
-                "max_extent_cm": 3.0,
-                "y_offset": 0,
-            }
-        },
-    )
-
-    with pytest.raises(RuntimeError, match="overlaps circle selection choice"):
-        overlay.draw_form_recipe(
-            Image.new("RGB", (200, 200), "white"),
-            recipe,
-            tmp_path,
-        )
 
 
 def test_render_form_recipe_writes_generic_overlay(tmp_path: Path) -> None:
     source_pdf = tmp_path / "source.pdf"
     source_render = tmp_path / "source.png"
     overlay_png = tmp_path / "overlay.png"
-    signature_path = tmp_path / "signature.png"
-
     pdf = canvas.Canvas(str(source_pdf), pagesize=(200, 200))
     pdf.drawString(20, 100, "source")
     pdf.save()
-    Image.new("RGBA", (40, 20), (0, 0, 0, 255)).save(signature_path)
     recipe = _generic_recipe(
         circles={"choice": {"rect": [150, 80, 30, 30], "stroke_width": 3}},
-        signatures={
-            "parent": {
-                "asset": signature_path.name,
-                "line_rect": [20, 150, 100, 2],
-                "horizontal_align": "left",
-                "max_extent_cm": 3.0,
-            }
-        }
     )
 
     normalized = overlay.render_form_recipe(
         source_pdf,
         recipe,
-        tmp_path,
         source_render_path=source_render,
         overlay_path=overlay_png,
     )

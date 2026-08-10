@@ -1,9 +1,9 @@
-"""Detect form geometry and render text, checks, signatures, and PDF overlays."""
+"""Detect form geometry and render generic content onto PDF overlays."""
 
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from functools import lru_cache
@@ -23,8 +23,7 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
 TEXT_COLOR = (20, 20, 20, 255)
-A4_SIZE_CM = (21.0, 29.7)
-FORM_RECIPE_SCHEMA = "pdf-form-tools.form-recipe.v1"
+FORM_RECIPE_SCHEMA = "pdf-form-tools.form-recipe.v2"
 WINDOWS_FONT_DIR = Path(os.environ["WINDIR"]) / "Fonts" if "WINDIR" in os.environ else None
 
 _RECT_SCHEMA = {
@@ -39,12 +38,11 @@ _RECT_SCHEMA = {
     "minItems": 4,
     "maxItems": 4,
 }
-_POSITIVE_NUMBER_SCHEMA = {"type": "number", "exclusiveMinimum": 0}
 FORM_RECIPE_JSON_SCHEMA: dict[str, Any] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
     "additionalProperties": False,
-    "required": ["schema", "template", "render", "fields", "signatures"],
+    "required": ["schema", "template", "render", "fields"],
     "properties": {
         "schema": {"const": FORM_RECIPE_SCHEMA},
         "template": {
@@ -62,7 +60,7 @@ FORM_RECIPE_JSON_SCHEMA: dict[str, Any] = {
         "render": {
             "type": "object",
             "additionalProperties": False,
-            "required": ["page_index", "scale", "expected_size", "page_size_cm"],
+            "required": ["page_index", "scale", "expected_size"],
             "properties": {
                 "page_index": {"type": "integer", "minimum": 0},
                 "scale": {"type": "integer", "minimum": 1},
@@ -71,16 +69,6 @@ FORM_RECIPE_JSON_SCHEMA: dict[str, Any] = {
                     "prefixItems": [
                         {"type": "integer", "minimum": 1},
                         {"type": "integer", "minimum": 1},
-                    ],
-                    "items": False,
-                    "minItems": 2,
-                    "maxItems": 2,
-                },
-                "page_size_cm": {
-                    "type": "array",
-                    "prefixItems": [
-                        _POSITIVE_NUMBER_SCHEMA,
-                        _POSITIVE_NUMBER_SCHEMA,
                     ],
                     "items": False,
                     "minItems": 2,
@@ -113,28 +101,6 @@ FORM_RECIPE_JSON_SCHEMA: dict[str, Any] = {
                 "properties": {
                     "rect": _RECT_SCHEMA,
                     "stroke_width": {"type": "integer", "minimum": 1},
-                },
-            },
-        },
-        "signatures": {
-            "type": "object",
-            "additionalProperties": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["asset", "line_rect", "horizontal_align"],
-                "properties": {
-                    "asset": {
-                        "type": "string",
-                        "minLength": 1,
-                        "pattern": "^[^/\\\\]+$",
-                    },
-                    "line_rect": _RECT_SCHEMA,
-                    "horizontal_align": {"enum": ["left", "center", "right"]},
-                    "min_cm_width": _POSITIVE_NUMBER_SCHEMA,
-                    "target_height": {"type": "integer", "minimum": 1},
-                    "max_extent_cm": _POSITIVE_NUMBER_SCHEMA,
-                    "downward_offset_cm": {"type": "number", "minimum": 0},
-                    "y_offset": {"type": "integer"},
                 },
             },
         },
@@ -351,12 +317,6 @@ def draw_text(
     draw.text((x, y), prepared, font=font, fill=fill)
 
 
-def centered_address_box(rect: Rect, *, top_pad: int, side_pad: int, height: int, right_pad: int | None = None) -> Rect:
-    """Return a padded horizontal band for centered address text."""
-
-    return rect.band(top_pad=top_pad, height=height, left_pad=side_pad, right_pad=right_pad)
-
-
 def detect_square_boxes(page_gray: np.ndarray, region: Rect) -> list[Rect]:
     """Detect checkbox-sized square contours in a grayscale page region."""
 
@@ -391,10 +351,17 @@ def detect_lines(page_gray: np.ndarray, region: Rect) -> list[Rect]:
     return sorted(lines, key=lambda item: item.x)
 
 
-def detect_id_slots(page_gray: np.ndarray, rect: Rect) -> list[Rect]:
-    """Detect the nine digit slots within an Israeli ID-number field."""
+def detect_guided_slots(
+    page_gray: np.ndarray,
+    region: Rect,
+    *,
+    expected_count: int,
+) -> list[Rect]:
+    """Detect text slots divided by vertical guides in a region's lower band."""
 
-    crop = page_gray[rect.y:rect.y2, rect.x:rect.x2]
+    if expected_count < 1:
+        raise ValueError("Expected slot count must be positive.")
+    crop = page_gray[region.y:region.y2, region.x:region.x2]
     guide_start = int(crop.shape[0] * 0.7)
     lower = crop[guide_start:, :]
     ink = lower < 180
@@ -429,25 +396,26 @@ def detect_id_slots(page_gray: np.ndarray, rect: Rect) -> list[Rect]:
     boundaries.append(crop.shape[1] - 1)
     boundaries = sorted(set(boundaries))
 
-    if len(boundaries) != 10:
-        raise RuntimeError(f"Expected 10 ID slot boundaries, found {len(boundaries)} for {rect}.")
+    expected_boundaries = expected_count + 1
+    if len(boundaries) != expected_boundaries:
+        raise RuntimeError(
+            f"Expected {expected_boundaries} slot boundaries, "
+            f"found {len(boundaries)} for {region}."
+        )
 
-    digit_top = rect.y + first_guide_row - int(rect.h * 0.34)
-    digit_height = int(rect.h * 0.48)
+    slot_top = region.y + first_guide_row - int(region.h * 0.34)
+    slot_height = int(region.h * 0.48)
     slots: list[Rect] = []
     for left, right in pairwise(boundaries):
-        slots.append(Rect(rect.x + left + 3, digit_top, right - left - 6, digit_height))
+        slots.append(
+            Rect(
+                region.x + left + 3,
+                slot_top,
+                right - left - 6,
+                slot_height,
+            )
+        )
     return slots
-
-
-def draw_id_number(draw: ImageDraw.ImageDraw, page_gray: np.ndarray, rect: Rect, number: str) -> None:
-    """Draw one ID-number digit in each detected slot."""
-
-    slots = detect_id_slots(page_gray, rect)
-    if len(number) != len(slots):
-        raise RuntimeError(f"ID length {len(number)} does not match detected slot count {len(slots)}.")
-    for digit, slot in zip(number, slots):
-        draw_text(draw, digit, slot, align="center", max_size=74, min_size=54)
 
 
 def draw_check(
@@ -492,73 +460,129 @@ def draw_circle(
     )
 
 
-def paste_signature(
-    overlay: Image.Image,
-    signature: Image.Image,
-    line_rect: Rect,
-    *,
-    min_cm_width: float = 2.0,
-    target_height: int | None = None,
-    max_extent_cm: float | None = None,
-    page_size_cm: tuple[float, float] = A4_SIZE_CM,
-    horizontal_align: Literal["left", "center", "right"] = "center",
-    downward_offset_cm: float | None = None,
-    y_offset: int = 45,
-) -> Rect:
-    """Scale and place a visible signature above a form line.
+def _occupancy_mask(image: Image.Image) -> np.ndarray:
+    """Return visible non-white pixels for deterministic placement scoring."""
 
-    ``max_extent_cm`` preserves aspect ratio and stops scaling when either the
-    cropped width or height reaches the requested physical size. Existing
-    callers retain line-width sizing when it is omitted. ``downward_offset_cm``
-    moves the signature's bottom edge that physical distance below the line and
-    supersedes the legacy pixel ``y_offset`` when supplied. The returned
-    rectangle is the placed signature's pixel bounds for collision checks.
+    rgba = np.asarray(image.convert("RGBA"), dtype=np.uint8)
+    visible = rgba[:, :, 3] > 8
+    non_white = np.min(rgba[:, :, :3], axis=2) < 245
+    return np.asarray(visible & non_white, dtype=np.uint8)
+
+
+def _nearby_axis_candidates(
+    preferred: int,
+    extent: int,
+    page_extent: int,
+    radius: int,
+    step: int,
+) -> list[int]:
+    maximum = page_extent - extent
+    if maximum < 0:
+        return []
+    lower = max(0, preferred - radius)
+    upper = min(maximum, preferred + radius)
+    if lower > upper:
+        return []
+    values = set(range(lower, upper + 1, step))
+    values.update({lower, upper, min(max(preferred, lower), upper)})
+    return sorted(values)
+
+
+def place_image_near_rect(
+    image: Image.Image,
+    anchor: Rect,
+    page: Image.Image,
+    protected_regions: Iterable[Rect] = (),
+    *,
+    occupancy_image: Image.Image | None = None,
+    horizontal_align: Literal["left", "center", "right"] = "center",
+) -> Rect:
+    """Place an already-sized image in nearby low-occupancy page space.
+
+    The image is never cropped or resized. The search is bounded to one maximum
+    image-or-anchor extent around the preferred position immediately above the
+    anchor. Candidates are ranked by occupied pixels and then distance, with
+    stable coordinate tie-breaks. Protected rectangles are hard exclusions;
+    ordinary page content is only a score penalty and may be overlapped.
+    ``occupancy_image`` can supply immutable background content while ``page``
+    remains the mutable RGBA target.
     """
 
-    alpha_bbox = signature.getchannel("A").getbbox()
-    if alpha_bbox:
-        signature = signature.crop(alpha_bbox)
-
+    if page.mode != "RGBA":
+        raise ValueError("Placement page must use RGBA mode.")
+    if image.width < 1 or image.height < 1:
+        raise ValueError("Placement image must have positive dimensions.")
+    if image.convert("RGBA").getchannel("A").getbbox() is None:
+        raise ValueError("Placement image has no visible pixels.")
+    if anchor.w < 1 or anchor.h < 1:
+        raise ValueError("Placement anchor must have positive dimensions.")
+    if (
+        anchor.x < 0
+        or anchor.y < 0
+        or anchor.x2 > page.width
+        or anchor.y2 > page.height
+    ):
+        raise ValueError(f"Placement anchor extends outside the page: {anchor}.")
     if horizontal_align not in {"left", "center", "right"}:
         raise ValueError(f"Unsupported horizontal alignment: {horizontal_align}")
+    if occupancy_image is not None and occupancy_image.size != page.size:
+        raise ValueError("Occupancy image and placement page must have the same size.")
 
-    if max_extent_cm is not None:
-        page_width_cm, page_height_cm = page_size_cm
-        if max_extent_cm <= 0 or page_width_cm <= 0 or page_height_cm <= 0:
-            raise ValueError("Physical signature and page dimensions must be positive.")
-        max_width = (overlay.width / page_width_cm) * max_extent_cm
-        max_height = (overlay.height / page_height_cm) * max_extent_cm
-        scale = min(max_width / signature.width, max_height / signature.height)
-        if target_height is not None:
-            scale = min(scale, target_height / signature.height)
-    else:
-        min_signature_width = round((overlay.width / page_size_cm[0]) * min_cm_width)
-        target_width = min(line_rect.w, max(min_signature_width, int(line_rect.w * 0.55)))
-        width_scale = target_width / signature.width
-        if target_height is None:
-            scale = width_scale
-        else:
-            scale = min(width_scale, target_height / signature.height)
-
-    resized_width = max(1, round(signature.width * scale))
-    resized_height = max(1, round(signature.height * scale))
-    resized = signature.resize((resized_width, resized_height), Image.Resampling.LANCZOS)
     if horizontal_align == "left":
-        x = line_rect.x
+        preferred_x = anchor.x
     elif horizontal_align == "right":
-        x = line_rect.x2 - resized_width
+        preferred_x = anchor.x2 - image.width
     else:
-        x = int(line_rect.x + (line_rect.w - resized_width) / 2)
-    if downward_offset_cm is None:
-        vertical_offset = y_offset
-    else:
-        page_height_cm = page_size_cm[1]
-        if downward_offset_cm < 0 or page_height_cm <= 0:
-            raise ValueError("Physical downward offset must be non-negative.")
-        vertical_offset = round((overlay.height / page_height_cm) * downward_offset_cm)
-    y = int(line_rect.y - resized_height + vertical_offset)
-    overlay.alpha_composite(resized, (x, y))
-    return Rect(x, y, resized_width, resized_height)
+        preferred_x = anchor.x + (anchor.w - image.width) // 2
+    preferred_y = anchor.y - image.height
+
+    radius = max(image.width, image.height, anchor.w, anchor.h)
+    step = max(1, min(image.width, image.height) // 20)
+    x_candidates = _nearby_axis_candidates(
+        preferred_x,
+        image.width,
+        page.width,
+        radius,
+        step,
+    )
+    y_candidates = _nearby_axis_candidates(
+        preferred_y,
+        image.height,
+        page.height,
+        radius,
+        step,
+    )
+    if not x_candidates or not y_candidates:
+        raise RuntimeError("The supplied image cannot fit on the placement page.")
+
+    occupancy = _occupancy_mask(page)
+    if occupancy_image is not None:
+        occupancy |= _occupancy_mask(occupancy_image)
+    integral = cv2.integral(occupancy)
+    protected = tuple(protected_regions)
+    best: tuple[tuple[int, int, int, int, int, int], Rect] | None = None
+    for y in y_candidates:
+        for x in x_candidates:
+            candidate = Rect(x, y, image.width, image.height)
+            if any(_rectangles_overlap(candidate, region) for region in protected):
+                continue
+            occupied = int(
+                integral[candidate.y2, candidate.x2]
+                - integral[candidate.y, candidate.x2]
+                - integral[candidate.y2, candidate.x]
+                + integral[candidate.y, candidate.x]
+            )
+            dx = abs(candidate.x - preferred_x)
+            dy = abs(candidate.y - preferred_y)
+            score = (occupied, dx + dy, dy, dx, candidate.y, candidate.x)
+            if best is None or score < best[0]:
+                best = (score, candidate)
+
+    if best is None:
+        raise RuntimeError("No nearby placement avoids every protected region.")
+    bounds = best[1]
+    page.alpha_composite(image.convert("RGBA"), (bounds.x, bounds.y))
+    return bounds
 
 
 def render_pdf_page(pdf_path: Path, page_index: int, scale: int, out_path: Path) -> Image.Image:
@@ -655,22 +679,12 @@ def validate_form_recipe(recipe: Mapping[str, Any]) -> dict[str, Any]:
             raise ValueError(f"Circle {name} stroke must leave a visible interior.")
         _require_rect_on_page(rect, expected_size, f"Circle {name} rect")
 
-    for name, signature in normalized["signatures"].items():
-        asset = signature["asset"]
-        if Path(asset).name != asset or asset in {".", ".."}:
-            raise ValueError(f"Signature {name} asset must be one filename.")
-        _require_rect_on_page(
-            _recipe_rect(signature["line_rect"]),
-            expected_size,
-            f"Signature {name} line_rect",
-        )
     return normalized
 
 
 def _draw_validated_form_recipe(
     source_image: Image.Image,
     recipe: Mapping[str, Any],
-    signatures_dir: Path,
 ) -> Image.Image:
     expected_size = tuple(recipe["render"]["expected_size"])
     if source_image.size != expected_size:
@@ -680,7 +694,7 @@ def _draw_validated_form_recipe(
 
     form_overlay = Image.new("RGBA", source_image.size, (255, 255, 255, 0))
     draw = ImageDraw.Draw(form_overlay)
-    for name, field in recipe["fields"].items():
+    for field in recipe["fields"].values():
         draw_text(
             draw,
             field["value"],
@@ -698,71 +712,22 @@ def _draw_validated_form_recipe(
             stroke_width=circle.get("stroke_width", 4),
         )
 
-    page_size_cm = tuple(float(value) for value in recipe["render"]["page_size_cm"])
-    placed: dict[str, Rect] = {}
-    for name, signature in recipe["signatures"].items():
-        asset_path = signatures_dir / signature["asset"]
-        try:
-            with Image.open(asset_path) as source_signature:
-                signature_image = source_signature.convert("RGBA")
-        except OSError as error:
-            raise RuntimeError(
-                f"Could not load signature asset {signature['asset']!r}: {error}"
-            ) from error
-
-        bounds = paste_signature(
-            form_overlay,
-            signature_image,
-            _recipe_rect(signature["line_rect"]),
-            min_cm_width=float(signature.get("min_cm_width", 2.0)),
-            target_height=signature.get("target_height"),
-            max_extent_cm=signature.get("max_extent_cm"),
-            page_size_cm=page_size_cm,
-            horizontal_align=signature["horizontal_align"],
-            downward_offset_cm=signature.get("downward_offset_cm"),
-            y_offset=signature.get("y_offset", 45),
-        )
-        if bounds.x < 0 or bounds.y < 0 or bounds.x2 > source_image.width or bounds.y2 > source_image.height:
-            raise RuntimeError(f"Signature {name} placement extends outside the page: {bounds}.")
-        for field_name, field in recipe["fields"].items():
-            field_bounds = _recipe_rect(field["rect"])
-            if _rectangles_overlap(bounds, field_bounds):
-                raise RuntimeError(
-                    f"Signature {name} overlaps text field {field_name}: "
-                    f"signature={bounds}, field={field_bounds}."
-                )
-        for circle_name, circle in recipe.get("circles", {}).items():
-            circle_bounds = _recipe_rect(circle["rect"])
-            if _rectangles_overlap(bounds, circle_bounds):
-                raise RuntimeError(
-                    f"Signature {name} overlaps circle selection {circle_name}: "
-                    f"signature={bounds}, circle={circle_bounds}."
-                )
-        for other_name, other_bounds in placed.items():
-            if _rectangles_overlap(bounds, other_bounds):
-                raise RuntimeError(
-                    "Signature placements overlap: "
-                    f"{other_name}={other_bounds}, {name}={bounds}."
-                )
-        placed[name] = bounds
     return form_overlay
 
 
 def draw_form_recipe(
     source_image: Image.Image,
     recipe: Mapping[str, Any],
-    signatures_dir: Path,
 ) -> Image.Image:
     """Draw one self-contained form recipe onto a transparent overlay."""
 
     normalized = validate_form_recipe(recipe)
-    return _draw_validated_form_recipe(source_image, normalized, signatures_dir)
+    return _draw_validated_form_recipe(source_image, normalized)
 
 
 def render_form_recipe(
     source_pdf: Path,
     recipe: Mapping[str, Any],
-    signatures_dir: Path,
     *,
     source_render_path: Path,
     overlay_path: Path,
@@ -785,7 +750,6 @@ def render_form_recipe(
     form_overlay = _draw_validated_form_recipe(
         source_image,
         normalized,
-        signatures_dir,
     )
     form_overlay.save(overlay_path)
     return normalized

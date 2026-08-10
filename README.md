@@ -5,8 +5,9 @@
 It is intentionally small:
 
 - render PDF pages to raster images
-- detect writable regions, checkbox boxes, signature lines, and ID slots
-- draw text, checks, circle selections, and signatures onto an overlay
+- detect writable regions, checkbox boxes, lines, and guided text slots
+- draw text, checks, and circle selections onto an overlay
+- place caller-prepared images in nearby low-occupancy space without resizing
 - validate and render self-contained JSON form recipes
 - merge the overlay back into the original PDF
 
@@ -26,13 +27,12 @@ from pathlib import Path
 from pdf_form_tools import merge_overlay_pdf, render_form_recipe
 
 recipe = {
-    "schema": "pdf-form-tools.form-recipe.v1",
+    "schema": "pdf-form-tools.form-recipe.v2",
     "template": {"id": "example", "version": 1},
     "render": {
         "page_index": 0,
         "scale": 2,
         "expected_size": [1191, 1684],
-        "page_size_cm": [21.0, 29.7],
     },
     "fields": {
         "name": {
@@ -49,7 +49,6 @@ recipe = {
             "stroke_width": 4,
         }
     },
-    "signatures": {},
 }
 
 source_pdf = Path("form.pdf")
@@ -57,13 +56,31 @@ overlay_png = Path("overlay-page1.png")
 render_form_recipe(
     source_pdf,
     recipe,
-    Path("signatures"),
     source_render_path=Path("preview-page1.png"),
     overlay_path=overlay_png,
 )
 
 merge_overlay_pdf(source_pdf, overlay_png, Path("form-filled.pdf"))
 ```
+
+Workflow callers can place an already-prepared image without exposing their
+asset or sizing policy to the package:
+
+```python
+from pdf_form_tools import Rect, place_image_near_rect
+
+placed = place_image_near_rect(
+    prepared_image,
+    Rect(300, 900, 420, 8),
+    transparent_overlay,
+    prior_image_bounds,
+    occupancy_image=rendered_page,
+)
+```
+
+The helper preserves the supplied image size, searches a bounded area near the
+anchor, penalizes ordinary occupied pixels, and never overlaps protected
+regions.
 
 ## Development
 

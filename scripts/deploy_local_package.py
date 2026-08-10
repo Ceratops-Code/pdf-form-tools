@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Build and install this package into the running Python interpreter.
 
 The helper snapshots current tracked files into temporary storage, builds one

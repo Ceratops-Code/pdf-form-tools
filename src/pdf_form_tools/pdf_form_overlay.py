@@ -104,6 +104,18 @@ FORM_RECIPE_JSON_SCHEMA: dict[str, Any] = {
                 },
             },
         },
+        "circles": {
+            "type": "object",
+            "additionalProperties": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["rect"],
+                "properties": {
+                    "rect": _RECT_SCHEMA,
+                    "stroke_width": {"type": "integer", "minimum": 1},
+                },
+            },
+        },
         "signatures": {
             "type": "object",
             "additionalProperties": {
@@ -456,6 +468,30 @@ def draw_check(
     draw.line([p2, p3], fill=fill, width=width)
 
 
+def draw_circle(
+    draw: ImageDraw.ImageDraw,
+    rect: Rect,
+    *,
+    stroke_width: int = 4,
+    fill: tuple[int, int, int, int] = TEXT_COLOR,
+) -> None:
+    """Draw an outline ellipse inside one recipe rectangle."""
+
+    if stroke_width < 1 or stroke_width * 2 >= min(rect.w, rect.h):
+        raise ValueError("Circle stroke must leave a visible interior.")
+    inset = stroke_width // 2
+    draw.ellipse(
+        (
+            rect.x + inset,
+            rect.y + inset,
+            rect.x2 - inset - 1,
+            rect.y2 - inset - 1,
+        ),
+        outline=fill,
+        width=stroke_width,
+    )
+
+
 def paste_signature(
     overlay: Image.Image,
     signature: Image.Image,
@@ -612,6 +648,13 @@ def validate_form_recipe(recipe: Mapping[str, Any]) -> dict[str, Any]:
             f"Field {name} rect",
         )
 
+    for name, circle in normalized.get("circles", {}).items():
+        rect = _recipe_rect(circle["rect"])
+        stroke_width = circle.get("stroke_width", 4)
+        if stroke_width * 2 >= min(rect.w, rect.h):
+            raise ValueError(f"Circle {name} stroke must leave a visible interior.")
+        _require_rect_on_page(rect, expected_size, f"Circle {name} rect")
+
     for name, signature in normalized["signatures"].items():
         asset = signature["asset"]
         if Path(asset).name != asset or asset in {".", ".."}:
@@ -648,6 +691,13 @@ def _draw_validated_form_recipe(
             bold=field.get("bold", False),
         )
 
+    for circle in recipe.get("circles", {}).values():
+        draw_circle(
+            draw,
+            _recipe_rect(circle["rect"]),
+            stroke_width=circle.get("stroke_width", 4),
+        )
+
     page_size_cm = tuple(float(value) for value in recipe["render"]["page_size_cm"])
     placed: dict[str, Rect] = {}
     for name, signature in recipe["signatures"].items():
@@ -680,6 +730,13 @@ def _draw_validated_form_recipe(
                 raise RuntimeError(
                     f"Signature {name} overlaps text field {field_name}: "
                     f"signature={bounds}, field={field_bounds}."
+                )
+        for circle_name, circle in recipe.get("circles", {}).items():
+            circle_bounds = _recipe_rect(circle["rect"])
+            if _rectangles_overlap(bounds, circle_bounds):
+                raise RuntimeError(
+                    f"Signature {name} overlaps circle selection {circle_name}: "
+                    f"signature={bounds}, circle={circle_bounds}."
                 )
         for other_name, other_bounds in placed.items():
             if _rectangles_overlap(bounds, other_bounds):

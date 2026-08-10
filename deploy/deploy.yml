@@ -1,6 +1,12 @@
 version: 1
 kind: ceratops-deploy
 operations:
+  deploy:
+    steps:
+      - id: build-and-install-local-package
+        run:
+          - python
+          - scripts/deploy_local_package.py
   preflight:
     steps:
       - id: check-release-version

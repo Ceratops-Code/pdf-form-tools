@@ -1,3 +1,6 @@
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -8,6 +11,23 @@ from reportlab.pdfgen import canvas
 
 import pdf_form_tools.pdf_form_overlay as overlay
 from pdf_form_tools import Rect, centered_address_box, detect_id_slots
+
+
+def test_package_import_does_not_write_to_stdout() -> None:
+    repository = Path(__file__).resolve().parents[1]
+    environment = {**os.environ, "PYTHONPATH": str(repository / "src")}
+    result = subprocess.run(
+        [sys.executable, "-c", "import pdf_form_tools"],
+        cwd=repository,
+        env=environment,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
 
 
 def _generic_recipe(

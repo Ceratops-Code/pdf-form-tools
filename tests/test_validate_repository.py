@@ -171,11 +171,11 @@ def test_local_deploy_builds_and_installs_exact_temporary_wheel(
     repository = tmp_path / "repository with spaces"
     repository.mkdir()
     (repository / "pyproject.toml").write_text(
-        '[project]\nname = "pdf-form-tools"\nversion = "2.4.0"\n',
+        '[project]\nname = "pdf-form-tools"\nversion = "2.4.1"\n',
         encoding="utf-8",
     )
     monkeypatch.setattr(local_deployer, "REPOSITORY_ROOT", repository)
-    installed_version = Mock(return_value="2.4.0")
+    installed_version = Mock(return_value="2.4.1")
     monkeypatch.setattr(local_deployer.importlib.metadata, "version", installed_version)
     source_dir: Path | None = None
     output_dir: Path | None = None
@@ -190,7 +190,7 @@ def test_local_deploy_builds_and_installs_exact_temporary_wheel(
         if "wheel" in command:
             source_dir = Path(kwargs["cwd"])
             output_dir = Path(command[command.index("--wheel-dir") + 1])
-            wheel = output_dir / "pdf_form_tools-2.4.0-py3-none-any.whl"
+            wheel = output_dir / "pdf_form_tools-2.4.1-py3-none-any.whl"
             wheel.write_text("wheel", encoding="utf-8")
             (source_dir / "build").mkdir()
             (source_dir / "src" / "pdf_form_tools.egg-info").mkdir(parents=True)
@@ -254,7 +254,7 @@ def test_local_deploy_rejects_missing_wheel_before_install(
     repository = tmp_path / "repository"
     repository.mkdir()
     (repository / "pyproject.toml").write_text(
-        '[project]\nname = "pdf-form-tools"\nversion = "2.4.0"\n',
+        '[project]\nname = "pdf-form-tools"\nversion = "2.4.1"\n',
         encoding="utf-8",
     )
     monkeypatch.setattr(local_deployer, "REPOSITORY_ROOT", repository)
@@ -284,7 +284,7 @@ def test_local_deploy_rejects_installed_version_mismatch(
     repository = tmp_path / "repository"
     repository.mkdir()
     (repository / "pyproject.toml").write_text(
-        '[project]\nname = "pdf-form-tools"\nversion = "2.4.0"\n',
+        '[project]\nname = "pdf-form-tools"\nversion = "2.4.1"\n',
         encoding="utf-8",
     )
     monkeypatch.setattr(local_deployer, "REPOSITORY_ROOT", repository)
@@ -296,7 +296,7 @@ def test_local_deploy_rejects_installed_version_mismatch(
             )
         if "wheel" in command:
             output_dir = Path(command[command.index("--wheel-dir") + 1])
-            (output_dir / "pdf_form_tools-2.4.0-py3-none-any.whl").write_text(
+            (output_dir / "pdf_form_tools-2.4.1-py3-none-any.whl").write_text(
                 "wheel", encoding="utf-8"
             )
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
@@ -313,7 +313,7 @@ def test_local_deploy_rejects_installed_version_mismatch(
     assert json.loads(capsys.readouterr().out) == {
         "stage": "verify",
         "exit_code": local_deployer.INTERNAL_ERROR,
-        "detail": "expected 2.4.0, found 2.3.0",
+        "detail": "expected 2.4.1, found 2.3.0",
     }
     assert run.call_count == 3
 

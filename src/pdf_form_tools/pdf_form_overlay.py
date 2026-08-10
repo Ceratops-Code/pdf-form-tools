@@ -13,8 +13,8 @@ from pathlib import Path
 from typing import Any, Literal
 
 import cv2
-import fitz
 import numpy as np
+import pymupdf as fitz
 from bidi.algorithm import get_display
 from jsonschema import Draft202012Validator
 from PIL import Image, ImageDraw, ImageFont

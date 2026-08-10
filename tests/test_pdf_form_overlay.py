@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import numpy as np
@@ -28,6 +29,14 @@ def test_package_import_does_not_write_to_stdout() -> None:
 
     assert result.returncode == 0, result.stderr
     assert result.stdout == ""
+
+
+def test_pymupdf_dependency_supports_modern_module_name() -> None:
+    repository = Path(__file__).resolve().parents[1]
+    with (repository / "pyproject.toml").open("rb") as project_file:
+        dependencies = tomllib.load(project_file)["project"]["dependencies"]
+
+    assert "pymupdf>=1.24.3" in dependencies
 
 
 def _generic_recipe(

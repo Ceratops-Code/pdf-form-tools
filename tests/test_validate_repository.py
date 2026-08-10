@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from unittest.mock import Mock
 
+import scripts.deploy_local_package as local_deployer
 import scripts.publish_current_version as publisher
 import scripts.validate_repository as validator
 
@@ -162,6 +163,156 @@ def test_successful_build_without_artifacts_fails_before_twine(
     assert "No package artifacts were created." in evidence_path.read_text(
         encoding="utf-8"
     )
+
+
+def test_local_deploy_builds_and_installs_exact_temporary_wheel(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    repository = tmp_path / "repository with spaces"
+    repository.mkdir()
+    (repository / "pyproject.toml").write_text(
+        '[project]\nname = "pdf-form-tools"\nversion = "2.4.0"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(local_deployer, "REPOSITORY_ROOT", repository)
+    installed_version = Mock(return_value="2.4.0")
+    monkeypatch.setattr(local_deployer.importlib.metadata, "version", installed_version)
+    source_dir: Path | None = None
+    output_dir: Path | None = None
+    wheel: Path | None = None
+
+    def successful_run(command: list[str], **kwargs) -> subprocess.CompletedProcess:
+        nonlocal source_dir, output_dir, wheel
+        if command == ["git", "ls-files", "-z"]:
+            return subprocess.CompletedProcess(
+                command, 0, stdout="pyproject.toml\0", stderr=""
+            )
+        if command[2] == "build":
+            source_dir = Path(kwargs["cwd"])
+            output_dir = Path(command[command.index("--outdir") + 1])
+            wheel = output_dir / "pdf_form_tools-2.4.0-py3-none-any.whl"
+            wheel.write_text("wheel", encoding="utf-8")
+            (source_dir / "build").mkdir()
+            (source_dir / "src" / "pdf_form_tools.egg-info").mkdir(parents=True)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    run = Mock(side_effect=successful_run)
+    monkeypatch.setattr(local_deployer.subprocess, "run", run)
+
+    assert local_deployer.main([]) == 0
+    assert capsys.readouterr().out == "OK\n"
+    assert source_dir is not None
+    assert output_dir is not None
+    assert wheel is not None
+    assert [call.args[0] for call in run.call_args_list] == [
+        ["git", "ls-files", "-z"],
+        [
+            sys.executable,
+            "-m",
+            "build",
+            "--wheel",
+            "--outdir",
+            str(output_dir),
+        ],
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "--disable-pip-version-check",
+            "install",
+            "--force-reinstall",
+            "--no-deps",
+            str(wheel),
+        ],
+    ]
+    for call, cwd in zip(
+        run.call_args_list,
+        [repository, source_dir, repository],
+        strict=True,
+    ):
+        assert call.kwargs == {
+            "cwd": cwd,
+            "capture_output": True,
+            "text": True,
+            "encoding": "utf-8",
+            "errors": "replace",
+            "check": False,
+        }
+    assert not output_dir.exists()
+    assert not source_dir.exists()
+    assert not (repository / "build").exists()
+    assert not (repository / "src" / "pdf_form_tools.egg-info").exists()
+    installed_version.assert_called_once_with("pdf-form-tools")
+
+
+def test_local_deploy_rejects_missing_wheel_before_install(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    (repository / "pyproject.toml").write_text(
+        '[project]\nname = "pdf-form-tools"\nversion = "2.4.0"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(local_deployer, "REPOSITORY_ROOT", repository)
+
+    def successful_run(command: list[str], **kwargs) -> subprocess.CompletedProcess:
+        if command == ["git", "ls-files", "-z"]:
+            return subprocess.CompletedProcess(
+                command, 0, stdout="pyproject.toml\0", stderr=""
+            )
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    run = Mock(side_effect=successful_run)
+    monkeypatch.setattr(local_deployer.subprocess, "run", run)
+
+    assert local_deployer.main([]) == local_deployer.INTERNAL_ERROR
+    assert json.loads(capsys.readouterr().out) == {
+        "stage": "artifact",
+        "exit_code": local_deployer.INTERNAL_ERROR,
+        "detail": "expected one wheel, found 0",
+    }
+    assert run.call_count == 2
+
+
+def test_local_deploy_rejects_installed_version_mismatch(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    (repository / "pyproject.toml").write_text(
+        '[project]\nname = "pdf-form-tools"\nversion = "2.4.0"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(local_deployer, "REPOSITORY_ROOT", repository)
+
+    def successful_run(command: list[str], **kwargs) -> subprocess.CompletedProcess:
+        if command == ["git", "ls-files", "-z"]:
+            return subprocess.CompletedProcess(
+                command, 0, stdout="pyproject.toml\0", stderr=""
+            )
+        if command[2] == "build":
+            output_dir = Path(command[command.index("--outdir") + 1])
+            (output_dir / "pdf_form_tools-2.4.0-py3-none-any.whl").write_text(
+                "wheel", encoding="utf-8"
+            )
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    run = Mock(side_effect=successful_run)
+    monkeypatch.setattr(local_deployer.subprocess, "run", run)
+    monkeypatch.setattr(
+        local_deployer.importlib.metadata,
+        "version",
+        Mock(return_value="2.3.0"),
+    )
+
+    assert local_deployer.main([]) == local_deployer.INTERNAL_ERROR
+    assert json.loads(capsys.readouterr().out) == {
+        "stage": "verify",
+        "exit_code": local_deployer.INTERNAL_ERROR,
+        "detail": "expected 2.4.0, found 2.3.0",
+    }
+    assert run.call_count == 3
 
 
 def _configure_release_project(tmp_path: Path, monkeypatch) -> Path:

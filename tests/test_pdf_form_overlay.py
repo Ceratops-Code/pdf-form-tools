@@ -10,7 +10,11 @@ import pdf_form_tools.pdf_form_overlay as overlay
 from pdf_form_tools import Rect, centered_address_box, detect_id_slots
 
 
-def _generic_recipe(*, signatures: dict | None = None) -> dict:
+def _generic_recipe(
+    *,
+    circles: dict | None = None,
+    signatures: dict | None = None,
+) -> dict:
     return {
         "schema": overlay.FORM_RECIPE_SCHEMA,
         "template": {"id": "test_form", "version": 1},
@@ -29,6 +33,7 @@ def _generic_recipe(*, signatures: dict | None = None) -> dict:
                 "min_size": 12,
             }
         },
+        "circles": circles or {},
         "signatures": signatures or {},
     }
 
@@ -92,6 +97,31 @@ def test_draw_check_creates_bold_upward_mark() -> None:
     assert bbox is not None
     assert bbox[1] <= rect.y + int(rect.h * 0.3)
     assert np.count_nonzero(alpha) > 900
+
+
+def test_draw_circle_creates_outline_with_clear_center() -> None:
+    image = Image.new("RGBA", (120, 120), (0, 0, 0, 0))
+    rect = Rect(20, 25, 70, 60)
+
+    overlay.draw_circle(ImageDraw.Draw(image), rect, stroke_width=4)
+
+    alpha = np.array(image.getchannel("A"))
+    bbox = image.getchannel("A").getbbox()
+    assert bbox is not None
+    assert rect.x <= bbox[0] <= rect.x + 2
+    assert rect.y <= bbox[1] <= rect.y + 2
+    assert rect.x2 - 2 <= bbox[2] <= rect.x2
+    assert rect.y2 - 2 <= bbox[3] <= rect.y2
+    assert alpha[rect.y + rect.h // 2, rect.x + rect.w // 2] == 0
+
+
+def test_validate_form_recipe_rejects_circle_without_visible_interior() -> None:
+    recipe = _generic_recipe(
+        circles={"choice": {"rect": [20, 80, 20, 20], "stroke_width": 10}}
+    )
+
+    with pytest.raises(ValueError, match="visible interior"):
+        overlay.validate_form_recipe(recipe)
 
 
 def test_paste_signature_respects_minimum_a4_width_without_height_limit() -> None:
@@ -343,6 +373,7 @@ def test_render_form_recipe_writes_generic_overlay(tmp_path: Path) -> None:
     pdf.save()
     Image.new("RGBA", (40, 20), (0, 0, 0, 255)).save(signature_path)
     recipe = _generic_recipe(
+        circles={"choice": {"rect": [150, 80, 30, 30], "stroke_width": 3}},
         signatures={
             "parent": {
                 "asset": signature_path.name,

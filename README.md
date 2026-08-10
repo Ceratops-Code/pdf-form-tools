@@ -6,7 +6,7 @@ It is intentionally small:
 
 - render PDF pages to raster images
 - detect writable regions, checkbox boxes, signature lines, and ID slots
-- draw text, checks, and signatures onto an overlay
+- draw text, checks, circle selections, and signatures onto an overlay
 - validate and render self-contained JSON form recipes
 - merge the overlay back into the original PDF
 
@@ -41,6 +41,12 @@ recipe = {
             "align": "center",
             "max_size": 44,
             "min_size": 28,
+        }
+    },
+    "circles": {
+        "selected_item": {
+            "rect": [650, 700, 48, 48],
+            "stroke_width": 4,
         }
     },
     "signatures": {},

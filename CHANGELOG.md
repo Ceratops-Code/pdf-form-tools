@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add a generic circle-outline primitive and optional recipe-level circle selections.
+
 ## 2.3.0
 
 - Add a closed JSON form-recipe contract with generic validation, text and signature rendering, collision checks, and verification-overlay generation.

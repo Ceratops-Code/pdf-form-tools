@@ -1,11 +1,11 @@
-"""Publish the current project version by creating its remote release tag.
+"""Publish and verify the current project release end to end.
 
-The version and package name come only from ``pyproject.toml``. Before any
-mutation, the helper requires a clean checkout, rejects a conflicting remote
-tag, and refuses a version that already exists on PyPI. Pushing the exact HEAD
-to the version tag is atomic and safe to retry: an existing tag succeeds only
-when it already targets that commit. Output is limited to ``OK`` or compact
-JSON so the deployment runner can consume it without subprocess logs.
+The version, package name, repository, and release notes come from tracked
+project metadata. Preflight is read-only. Publication pushes the exact clean
+HEAD to its version tag, waits for the tag-triggered trusted-publishing workflow,
+verifies PyPI, creates the matching public GitHub release, and verifies the
+result. Every completed boundary is safe to retry; stdout remains ``OK`` or one
+compact failure object for the repository lifecycle operation runner.
 """
 
 from __future__ import annotations
@@ -15,15 +15,20 @@ import json
 import re
 import subprocess
 import sys
+import time
 import tomllib
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 REMOTE = "origin"
+WORKFLOW = "publish-pypi.yml"
+WAIT_SECONDS = 900
+POLL_SECONDS = 5
 INTERNAL_ERROR = 2
 VERSION_PATTERN = re.compile(
     r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)"
@@ -53,10 +58,12 @@ def _emit_failure(stage: str, exit_code: int, tag: str | None = None) -> None:
     print(json.dumps(payload, separators=(",", ":")))
 
 
-def _git(stage: str, *arguments: str) -> str:
+def _command(stage: str, executable: str, *arguments: str) -> str:
+    """Run one exact argv command and convert failures to a compact stage."""
+
     try:
         result = subprocess.run(
-            ["git", *arguments],
+            [executable, *arguments],
             cwd=REPOSITORY_ROOT,
             capture_output=True,
             text=True,
@@ -69,19 +76,62 @@ def _git(stage: str, *arguments: str) -> str:
     return result.stdout.strip()
 
 
-def _project_identity() -> tuple[str, str]:
+def _git(stage: str, *arguments: str) -> str:
+    return _command(stage, "git", *arguments)
+
+
+def _gh(stage: str, *arguments: str) -> str:
+    return _command(stage, "gh", *arguments)
+
+
+def _project_identity() -> tuple[str, str, str]:
+    """Read the package identity and canonical GitHub repository slug."""
+
     try:
         with (REPOSITORY_ROOT / "pyproject.toml").open("rb") as project_file:
             project = tomllib.load(project_file)["project"]
         name = project["name"]
         version = project["version"]
+        repository_url = project["urls"]["Repository"]
     except (KeyError, OSError, TypeError, tomllib.TOMLDecodeError) as error:
         raise PublishError("metadata", INTERNAL_ERROR) from error
-    if not isinstance(name, str) or not isinstance(version, str):
+    if not all(isinstance(value, str) for value in (name, version, repository_url)):
         raise PublishError("metadata", INTERNAL_ERROR)
     if VERSION_PATTERN.fullmatch(version) is None:
         raise PublishError("version", INTERNAL_ERROR)
-    return name, version
+    parsed = urllib.parse.urlparse(repository_url)
+    parts = [part for part in parsed.path.strip("/").split("/") if part]
+    if parsed.scheme != "https" or parsed.netloc.lower() != "github.com" or len(parts) != 2:
+        raise PublishError("repository", INTERNAL_ERROR)
+    owner, repository = parts
+    repository = repository.removesuffix(".git")
+    if not owner or not repository:
+        raise PublishError("repository", INTERNAL_ERROR)
+    return name, version, f"{owner}/{repository}"
+
+
+def _changelog_notes(version: str) -> str:
+    """Return exactly one nonempty version section from the tracked changelog."""
+
+    try:
+        lines = (REPOSITORY_ROOT / "CHANGELOG.md").read_text(
+            encoding="utf-8"
+        ).splitlines()
+    except (OSError, UnicodeError) as error:
+        raise PublishError("changelog", INTERNAL_ERROR) from error
+    heading = f"## {version}"
+    try:
+        start = lines.index(heading) + 1
+    except ValueError as error:
+        raise PublishError("changelog", 1) from error
+    end = next(
+        (index for index in range(start, len(lines)) if lines[index].startswith("## ")),
+        len(lines),
+    )
+    notes = "\n".join(lines[start:end]).strip()
+    if not notes:
+        raise PublishError("changelog", 1)
+    return notes
 
 
 def _remote_tag_target(tag: str) -> str | None:
@@ -96,44 +146,233 @@ def _remote_tag_target(tag: str) -> str | None:
     return fields[0]
 
 
-def _version_is_published(name: str, version: str) -> bool:
-    package = urllib.parse.quote(name, safe="")
-    release = urllib.parse.quote(version, safe="")
+def _json_request(url: str, stage: str) -> Mapping[str, Any] | None:
     request = urllib.request.Request(
-        f"https://pypi.org/pypi/{package}/{release}/json",
-        headers={"User-Agent": "pdf-form-tools-release-check/1"},
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "pdf-form-tools-release/1",
+        },
     )
     try:
         with urllib.request.urlopen(request, timeout=15) as response:
             if response.status != 200:
-                raise PublishError("pypi", INTERNAL_ERROR)
-            return True
+                raise PublishError(stage, INTERNAL_ERROR)
+            value = json.load(response)
     except urllib.error.HTTPError as error:
         if error.code == 404:
-            return False
-        raise PublishError("pypi", error.code) from error
-    except urllib.error.URLError as error:
-        raise PublishError("pypi", INTERNAL_ERROR) from error
+            return None
+        raise PublishError(stage, error.code) from error
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise PublishError(stage, INTERNAL_ERROR) from error
+    if not isinstance(value, Mapping):
+        raise PublishError(stage, INTERNAL_ERROR)
+    return value
+
+
+def _version_is_published(name: str, version: str) -> bool:
+    package = urllib.parse.quote(name, safe="")
+    release = urllib.parse.quote(version, safe="")
+    return (
+        _json_request(
+            f"https://pypi.org/pypi/{package}/{release}/json",
+            "pypi",
+        )
+        is not None
+    )
+
+
+def _github_release(repository: str, tag: str) -> Mapping[str, Any] | None:
+    """Return public or draft release state through the authenticated gh session."""
+
+    encoded_tag = urllib.parse.quote(tag, safe="")
+    try:
+        result = subprocess.run(
+            [
+                "gh",
+                "api",
+                "--method",
+                "GET",
+                "--header",
+                "Accept: application/vnd.github+json",
+                "--header",
+                "X-GitHub-Api-Version: 2022-11-28",
+                f"repos/{repository}/releases/tags/{encoded_tag}",
+            ],
+            cwd=REPOSITORY_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as error:
+        raise PublishError("github_release", INTERNAL_ERROR) from error
+    if result.returncode:
+        try:
+            failure = json.loads(result.stdout)
+        except (TypeError, json.JSONDecodeError):
+            failure = None
+        if isinstance(failure, Mapping) and str(failure.get("status")) == "404":
+            return None
+        raise PublishError("github_release", result.returncode)
+    try:
+        value = json.loads(result.stdout)
+    except (TypeError, json.JSONDecodeError) as error:
+        raise PublishError("github_release", INTERNAL_ERROR) from error
+    if not isinstance(value, Mapping):
+        raise PublishError("github_release", INTERNAL_ERROR)
+    return value
+
+
+def _public_release(value: Mapping[str, Any] | None, tag: str) -> bool:
+    return bool(
+        value is not None
+        and value.get("tag_name") == tag
+        and value.get("draft") is False
+        and value.get("prerelease") is False
+        and isinstance(value.get("html_url"), str)
+    )
+
+
+def _workflow_run(head: str, tag: str) -> Mapping[str, Any] | None:
+    """Return the exact tag-push workflow run, if GitHub has registered it."""
+
+    raw = _gh(
+        "workflow_lookup",
+        "run",
+        "list",
+        "--workflow",
+        WORKFLOW,
+        "--event",
+        "push",
+        "--branch",
+        tag,
+        "--commit",
+        head,
+        "--limit",
+        "20",
+        "--json",
+        "databaseId,headSha,status,conclusion,url",
+    )
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise PublishError("workflow_lookup", INTERNAL_ERROR) from error
+    if not isinstance(value, list) or not all(isinstance(item, Mapping) for item in value):
+        raise PublishError("workflow_lookup", INTERNAL_ERROR)
+    matches = [item for item in value if item.get("headSha") == head]
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise PublishError("workflow_lookup", INTERNAL_ERROR)
+    return matches[0]
+
+
+def _wait_for_workflow(head: str, tag: str) -> Mapping[str, Any]:
+    """Wait for one exact workflow run and require successful completion."""
+
+    deadline = time.monotonic() + WAIT_SECONDS
+    while True:
+        run = _workflow_run(head, tag)
+        if run is not None and run.get("status") == "completed":
+            if run.get("conclusion") != "success":
+                raise PublishError("workflow", 1)
+            return run
+        if time.monotonic() >= deadline:
+            raise PublishError("workflow_timeout", 1)
+        time.sleep(POLL_SECONDS)
+
+
+def _wait_for_pypi(name: str, version: str) -> None:
+    """Allow bounded registry propagation after the publishing workflow."""
+
+    deadline = time.monotonic() + WAIT_SECONDS
+    while not _version_is_published(name, version):
+        if time.monotonic() >= deadline:
+            raise PublishError("pypi_timeout", 1)
+        time.sleep(POLL_SECONDS)
+
+
+def _ensure_github_release(
+    repository: str,
+    tag: str,
+    notes: str,
+) -> None:
+    """Create the public release once and verify its externally visible state."""
+
+    existing = _github_release(repository, tag)
+    if existing is not None:
+        if not _public_release(existing, tag):
+            raise PublishError("github_release", 1)
+        return
+    _gh(
+        "github_release_create",
+        "release",
+        "create",
+        tag,
+        "--repo",
+        repository,
+        "--verify-tag",
+        "--title",
+        tag,
+        "--notes",
+        notes,
+    )
+    if not _public_release(_github_release(repository, tag), tag):
+        raise PublishError("github_release_verify", 1)
 
 
 def publish_current_version(*, check_only: bool) -> int:
+    """Preflight or complete the current release through verified boundaries."""
+
     tag: str | None = None
     try:
         if _git("git_status", "status", "--porcelain"):
             raise PublishError("working_tree", 1)
-        name, version = _project_identity()
+        name, version, repository = _project_identity()
+        notes = _changelog_notes(version)
+        _gh(
+            "github_preflight",
+            "workflow",
+            "view",
+            WORKFLOW,
+            "--repo",
+            repository,
+        )
         tag = f"v{version}"
         head = _git("head", "rev-parse", "HEAD")
         remote_target = _remote_tag_target(tag)
-        if remote_target is not None:
-            if remote_target != head:
-                raise PublishError("tag_conflict", 1)
+        if remote_target is not None and remote_target != head:
+            raise PublishError("tag_conflict", 1)
+
+        if remote_target is None:
+            if _version_is_published(name, version):
+                raise PublishError("pypi_version", 1)
+            if _github_release(repository, tag) is not None:
+                raise PublishError("github_release_conflict", 1)
+            if check_only:
+                print("OK")
+                return 0
+            _git("push", "push", REMOTE, f"{head}:refs/tags/{tag}")
+            _wait_for_workflow(head, tag)
+            _wait_for_pypi(name, version)
+        elif check_only:
             print("OK")
             return 0
-        if _version_is_published(name, version):
-            raise PublishError("pypi_version", 1)
-        if not check_only:
-            _git("push", "push", REMOTE, f"{head}:refs/tags/{tag}")
+        else:
+            published = _version_is_published(name, version)
+            existing_release = _github_release(repository, tag)
+            if published and _public_release(existing_release, tag):
+                print("OK")
+                return 0
+            if not published:
+                _wait_for_workflow(head, tag)
+                _wait_for_pypi(name, version)
+
+        _ensure_github_release(repository, tag, notes)
+        if not _version_is_published(name, version):
+            raise PublishError("pypi_verify", 1)
+        if not _public_release(_github_release(repository, tag), tag):
+            raise PublishError("github_release_verify", 1)
     except PublishError as error:
         _emit_failure(error.stage, error.exit_code, tag)
         return error.exit_code

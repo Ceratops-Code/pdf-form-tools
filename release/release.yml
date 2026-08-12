@@ -1,0 +1,16 @@
+version: 1
+kind: ceratops-release
+operations:
+  preflight:
+    steps:
+      - id: check-release-version
+        run:
+          - python
+          - scripts/publish_current_version.py
+          - --check-only
+  publish:
+    steps:
+      - id: publish-and-verify-release
+        run:
+          - python
+          - scripts/publish_current_version.py

@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.0.1
+
+- Make ship own verified remote release publication while keeping deployment
+  local-only.
+
 ## 3.0.0
 
 - Replace signature-specific recipe fields and placement APIs with generic
@@ -8,9 +13,6 @@
 - Replace address- and identity-specific public helpers with generic band,
   guided-slot detection, and text-drawing primitives owned by their callers.
 - Advance the closed form-recipe contract to `pdf-form-tools.form-recipe.v2`.
-- Make ship own verified remote release publication while keeping deployment
-  local-only.
-
 ## 2.4.0
 
 - Add a generic circle-outline primitive and optional recipe-level circle selections.

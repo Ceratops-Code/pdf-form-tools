@@ -210,6 +210,20 @@ def test_place_image_near_rect_fails_when_protected_regions_block_search() -> No
         )
 
 
+def test_place_image_near_rect_checks_protected_region_edges_between_steps() -> None:
+    page = Image.new("RGBA", (800, 204), (0, 0, 0, 0))
+    supplied = Image.new("RGBA", (200, 200), (0, 0, 0, 255))
+
+    placed = overlay.place_image_near_rect(
+        supplied,
+        Rect(400, 200, 200, 4),
+        page,
+        [Rect(0, 0, 205, 204), Rect(405, 0, 395, 204)],
+    )
+
+    assert placed == Rect(205, 0, 200, 200)
+
+
 def test_detect_guided_slots_follows_printed_guides() -> None:
     page_gray = np.full((120, 920), 255, dtype=np.uint8)
     rect = Rect(10, 10, 900, 90)

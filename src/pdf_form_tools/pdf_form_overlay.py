@@ -488,6 +488,27 @@ def _nearby_axis_candidates(
     return sorted(values)
 
 
+def _add_protected_edge_candidates(
+    candidates: Iterable[int],
+    protected_intervals: Iterable[tuple[int, int]],
+    extent: int,
+) -> list[int]:
+    """Include every in-range coordinate that places an image beside an edge."""
+
+    values = set(candidates)
+    if not values:
+        return []
+    lower = min(values)
+    upper = max(values)
+    for start, end in protected_intervals:
+        values.update(
+            value
+            for value in (start - extent, end)
+            if lower <= value <= upper
+        )
+    return sorted(values)
+
+
 def place_image_near_rect(
     image: Image.Image,
     anchor: Rect,
@@ -538,19 +559,28 @@ def place_image_near_rect(
 
     radius = max(image.width, image.height, anchor.w, anchor.h)
     step = max(1, min(image.width, image.height) // 20)
-    x_candidates = _nearby_axis_candidates(
-        preferred_x,
+    protected = tuple(protected_regions)
+    x_candidates = _add_protected_edge_candidates(
+        _nearby_axis_candidates(
+            preferred_x,
+            image.width,
+            page.width,
+            radius,
+            step,
+        ),
+        ((region.x, region.x2) for region in protected),
         image.width,
-        page.width,
-        radius,
-        step,
     )
-    y_candidates = _nearby_axis_candidates(
-        preferred_y,
+    y_candidates = _add_protected_edge_candidates(
+        _nearby_axis_candidates(
+            preferred_y,
+            image.height,
+            page.height,
+            radius,
+            step,
+        ),
+        ((region.y, region.y2) for region in protected),
         image.height,
-        page.height,
-        radius,
-        step,
     )
     if not x_candidates or not y_candidates:
         raise RuntimeError("The supplied image cannot fit on the placement page.")
@@ -559,7 +589,6 @@ def place_image_near_rect(
     if occupancy_image is not None:
         occupancy |= _occupancy_mask(occupancy_image)
     integral = cv2.integral(occupancy)
-    protected = tuple(protected_regions)
     best: tuple[tuple[int, int, int, int, int, int], Rect] | None = None
     for y in y_candidates:
         for x in x_candidates:

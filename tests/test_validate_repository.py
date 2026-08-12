@@ -348,6 +348,51 @@ def _published_release() -> dict[str, object]:
     }
 
 
+def test_release_preflight_rejects_authenticated_draft_before_push(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    repository = _configure_release_project(tmp_path, monkeypatch)
+    head = "a" * 40
+    draft = {
+        "tag_name": "v2.2.0",
+        "draft": True,
+        "prerelease": False,
+        "html_url": "https://example.invalid/releases/v2.2.0",
+    }
+    run = Mock(
+        side_effect=[
+            subprocess.CompletedProcess([], 0, stdout=""),
+            subprocess.CompletedProcess([], 0, stdout=f"{head}\n"),
+            subprocess.CompletedProcess([], 0, stdout=""),
+            subprocess.CompletedProcess([], 0, stdout=json.dumps(draft)),
+        ]
+    )
+    monkeypatch.setattr(publisher.subprocess, "run", run)
+    monkeypatch.setattr(publisher, "_version_is_published", Mock(return_value=False))
+
+    exit_code = publisher.main(["--check-only"])
+
+    assert exit_code == 1
+    assert json.loads(capsys.readouterr().out) == {
+        "stage": "github_release_conflict",
+        "exit_code": 1,
+        "tag": "v2.2.0",
+    }
+    assert run.call_args_list[-1].args[0] == [
+        "gh",
+        "api",
+        "--method",
+        "GET",
+        "--header",
+        "Accept: application/vnd.github+json",
+        "--header",
+        "X-GitHub-Api-Version: 2022-11-28",
+        "repos/ceratops-code/pdf-form-tools/releases/tags/v2.2.0",
+    ]
+    assert all(call.kwargs["cwd"] == repository for call in run.call_args_list)
+    assert not any(call.args[0][:2] == ["git", "push"] for call in run.call_args_list)
+
+
 def test_release_preflight_constructs_checks_without_push(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:

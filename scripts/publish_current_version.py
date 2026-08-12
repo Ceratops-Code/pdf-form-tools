@@ -183,12 +183,44 @@ def _version_is_published(name: str, version: str) -> bool:
 
 
 def _github_release(repository: str, tag: str) -> Mapping[str, Any] | None:
-    owner, name = repository.split("/", 1)
+    """Return public or draft release state through the authenticated gh session."""
+
     encoded_tag = urllib.parse.quote(tag, safe="")
-    return _json_request(
-        f"https://api.github.com/repos/{owner}/{name}/releases/tags/{encoded_tag}",
-        "github_release",
-    )
+    try:
+        result = subprocess.run(
+            [
+                "gh",
+                "api",
+                "--method",
+                "GET",
+                "--header",
+                "Accept: application/vnd.github+json",
+                "--header",
+                "X-GitHub-Api-Version: 2022-11-28",
+                f"repos/{repository}/releases/tags/{encoded_tag}",
+            ],
+            cwd=REPOSITORY_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as error:
+        raise PublishError("github_release", INTERNAL_ERROR) from error
+    if result.returncode:
+        try:
+            failure = json.loads(result.stdout)
+        except (TypeError, json.JSONDecodeError):
+            failure = None
+        if isinstance(failure, Mapping) and str(failure.get("status")) == "404":
+            return None
+        raise PublishError("github_release", result.returncode)
+    try:
+        value = json.loads(result.stdout)
+    except (TypeError, json.JSONDecodeError) as error:
+        raise PublishError("github_release", INTERNAL_ERROR) from error
+    if not isinstance(value, Mapping):
+        raise PublishError("github_release", INTERNAL_ERROR)
+    return value
 
 
 def _public_release(value: Mapping[str, Any] | None, tag: str) -> bool:

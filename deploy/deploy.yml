@@ -7,16 +7,3 @@ operations:
         run:
           - python
           - scripts/deploy_local_package.py
-  preflight:
-    steps:
-      - id: check-release-version
-        run:
-          - python
-          - scripts/publish_current_version.py
-          - --check-only
-  after_ship:
-    steps:
-      - id: publish-release-tag
-        run:
-          - python
-          - scripts/publish_current_version.py

@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from unittest.mock import Mock
 
+import pytest
+
 import scripts.deploy_local_package as local_deployer
 import scripts.publish_current_version as publisher
 import scripts.validate_repository as validator
@@ -322,11 +324,28 @@ def _configure_release_project(tmp_path: Path, monkeypatch) -> Path:
     repository = tmp_path / "release repository with spaces"
     repository.mkdir()
     (repository / "pyproject.toml").write_text(
-        '[project]\nname = "pdf-form-tools"\nversion = "2.2.0"\n',
+        '[project]\nname = "pdf-form-tools"\nversion = "2.2.0"\n'
+        '[project.urls]\n'
+        'Repository = "https://github.com/ceratops-code/pdf-form-tools"\n',
         encoding="utf-8",
     )
+    (repository / "CHANGELOG.md").write_text(
+        "# Changelog\n\n## 2.2.0\n\n- Release notes.\n\n## 2.1.0\n",
+        encoding="utf-8",
+        newline="\n",
+    )
     monkeypatch.setattr(publisher, "REPOSITORY_ROOT", repository)
+    monkeypatch.setattr(publisher, "_gh", Mock(return_value=""))
     return repository
+
+
+def _published_release() -> dict[str, object]:
+    return {
+        "tag_name": "v2.2.0",
+        "draft": False,
+        "prerelease": False,
+        "html_url": "https://example.invalid/releases/v2.2.0",
+    }
 
 
 def test_release_preflight_constructs_checks_without_push(
@@ -342,8 +361,10 @@ def test_release_preflight_constructs_checks_without_push(
         ]
     )
     registry_check = Mock(return_value=False)
+    release_check = Mock(return_value=None)
     monkeypatch.setattr(publisher.subprocess, "run", run)
     monkeypatch.setattr(publisher, "_version_is_published", registry_check)
+    monkeypatch.setattr(publisher, "_github_release", release_check)
 
     exit_code = publisher.main(["--check-only"])
 
@@ -363,6 +384,9 @@ def test_release_preflight_constructs_checks_without_push(
     ]
     assert all(call.kwargs["cwd"] == repository for call in run.call_args_list)
     registry_check.assert_called_once_with("pdf-form-tools", "2.2.0")
+    release_check.assert_called_once_with(
+        "ceratops-code/pdf-form-tools", "v2.2.0"
+    )
 
 
 def test_release_pushes_exact_head_to_new_version_tag(
@@ -379,7 +403,16 @@ def test_release_pushes_exact_head_to_new_version_tag(
         ]
     )
     monkeypatch.setattr(publisher.subprocess, "run", run)
-    monkeypatch.setattr(publisher, "_version_is_published", Mock(return_value=False))
+    registry_check = Mock(side_effect=[False, True])
+    release_check = Mock(side_effect=[None, _published_release()])
+    workflow_wait = Mock(return_value={"status": "completed", "conclusion": "success"})
+    registry_wait = Mock()
+    ensure_release = Mock()
+    monkeypatch.setattr(publisher, "_version_is_published", registry_check)
+    monkeypatch.setattr(publisher, "_github_release", release_check)
+    monkeypatch.setattr(publisher, "_wait_for_workflow", workflow_wait)
+    monkeypatch.setattr(publisher, "_wait_for_pypi", registry_wait)
+    monkeypatch.setattr(publisher, "_ensure_github_release", ensure_release)
 
     exit_code = publisher.main([])
 
@@ -391,6 +424,13 @@ def test_release_pushes_exact_head_to_new_version_tag(
         "origin",
         f"{head}:refs/tags/v2.2.0",
     ]
+    workflow_wait.assert_called_once_with(head, "v2.2.0")
+    registry_wait.assert_called_once_with("pdf-form-tools", "2.2.0")
+    ensure_release.assert_called_once_with(
+        "ceratops-code/pdf-form-tools",
+        "v2.2.0",
+        "- Release notes.",
+    )
 
 
 def test_release_retry_accepts_only_the_same_remote_commit(
@@ -409,16 +449,80 @@ def test_release_retry_accepts_only_the_same_remote_commit(
             ),
         ]
     )
-    registry_check = Mock()
+    registry_check = Mock(return_value=True)
+    release_check = Mock(return_value=_published_release())
     monkeypatch.setattr(publisher.subprocess, "run", run)
     monkeypatch.setattr(publisher, "_version_is_published", registry_check)
+    monkeypatch.setattr(publisher, "_github_release", release_check)
 
     exit_code = publisher.main([])
 
     assert exit_code == 0
     assert capsys.readouterr().out == "OK\n"
     assert run.call_count == 3
-    registry_check.assert_not_called()
+    registry_check.assert_called_once_with("pdf-form-tools", "2.2.0")
+    release_check.assert_called_once_with(
+        "ceratops-code/pdf-form-tools", "v2.2.0"
+    )
+
+
+def test_release_retry_completes_an_interrupted_tag_publish(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    _configure_release_project(tmp_path, monkeypatch)
+    head = "c" * 40
+    run = Mock(
+        side_effect=[
+            subprocess.CompletedProcess([], 0, stdout=""),
+            subprocess.CompletedProcess([], 0, stdout=f"{head}\n"),
+            subprocess.CompletedProcess(
+                [],
+                0,
+                stdout=f"{head}\trefs/tags/v2.2.0\n",
+            ),
+        ]
+    )
+    registry_check = Mock(side_effect=[False, True])
+    release_check = Mock(
+        side_effect=[None, None, _published_release(), _published_release()]
+    )
+    workflow_wait = Mock(return_value={"status": "completed", "conclusion": "success"})
+    registry_wait = Mock()
+    gh = Mock(return_value="")
+    monkeypatch.setattr(publisher.subprocess, "run", run)
+    monkeypatch.setattr(publisher, "_version_is_published", registry_check)
+    monkeypatch.setattr(publisher, "_github_release", release_check)
+    monkeypatch.setattr(publisher, "_wait_for_workflow", workflow_wait)
+    monkeypatch.setattr(publisher, "_wait_for_pypi", registry_wait)
+    monkeypatch.setattr(publisher, "_gh", gh)
+
+    exit_code = publisher.main([])
+
+    assert exit_code == 0
+    assert capsys.readouterr().out == "OK\n"
+    assert run.call_count == 3
+    workflow_wait.assert_called_once_with(head, "v2.2.0")
+    registry_wait.assert_called_once_with("pdf-form-tools", "2.2.0")
+    assert gh.call_args.args[:4] == (
+        "github_release_create",
+        "release",
+        "create",
+        "v2.2.0",
+    )
+
+
+def test_release_wait_rejects_a_failed_tag_workflow(monkeypatch) -> None:
+    monkeypatch.setattr(
+        publisher,
+        "_workflow_run",
+        Mock(return_value={"status": "completed", "conclusion": "failure"}),
+    )
+
+    with pytest.raises(publisher.PublishError) as captured:
+        publisher._wait_for_workflow("a" * 40, "v2.2.0")
+
+    assert captured.value.stage == "workflow"
+    assert captured.value.exit_code == 1
 
 
 def test_release_rejects_existing_pypi_version_with_compact_json(

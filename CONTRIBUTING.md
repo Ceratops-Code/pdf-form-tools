@@ -21,13 +21,13 @@ success or compact JSON identifying the failed stage and evidence file.
 ## Releases
 
 Document the release in `CHANGELOG.md` and set the next semantic version in
-`pyproject.toml` before promotion. The deployment preflight rejects an existing
-PyPI version or a conflicting remote tag. After shipping, `after_ship` pushes
-the exact synchronized commit to its `v<version>` tag, which triggers the
-existing trusted-publishing workflow. The build job generates and verifies
-GitHub attestations for both distributions before handing them to the publish
-job. After that workflow succeeds, create the GitHub release from the matching
-changelog entry.
+`pyproject.toml` before promotion. Ship runs the release preflight before its
+first remote mutation and rejects an existing PyPI version or a conflicting
+remote tag. After merge and synchronization, ship pushes the exact synchronized
+commit to its `v<version>` tag, waits for the trusted-publishing workflow,
+verifies PyPI, then creates and verifies the public GitHub release from the
+matching changelog entry. Only after release publication succeeds does ship run
+the local-only `deploy` operation.
 
 ## Pull requests
 

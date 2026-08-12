@@ -8,6 +8,8 @@
 - Replace address- and identity-specific public helpers with generic band,
   guided-slot detection, and text-drawing primitives owned by their callers.
 - Advance the closed form-recipe contract to `pdf-form-tools.form-recipe.v2`.
+- Make ship own verified remote release publication while keeping deployment
+  local-only.
 
 ## 2.4.0
 

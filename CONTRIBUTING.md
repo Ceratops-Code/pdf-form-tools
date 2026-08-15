@@ -24,10 +24,10 @@ Document the release in `CHANGELOG.md` and set the next semantic version in
 `pyproject.toml` before promotion. Ship runs the release preflight before its
 first remote mutation and rejects an existing PyPI version or a conflicting
 remote tag. After merge and synchronization, ship pushes the exact synchronized
-commit to its `v<version>` tag, waits for the trusted-publishing workflow,
-verifies PyPI, then creates and verifies the public GitHub release from the
-matching changelog entry. Only after release publication succeeds does ship run
-the local-only `deploy` operation.
+commit to its `v<version>` tag. `.github/workflows/release.yml` publishes with
+PyPI trusted publishing, then creates and verifies the public GitHub release
+from the matching changelog entry. Local commands cannot publish. Only after
+the workflow succeeds does ship run the local-only `deploy` operation.
 
 ## Pull requests
 

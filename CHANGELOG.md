@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.0.3
+
+- Allow CI and repository validation workflows to be dispatched manually for
+  outage recovery.
+
 ## 3.0.2
 
 - Declare the PyPI package as the repository's lifecycle release artifact.

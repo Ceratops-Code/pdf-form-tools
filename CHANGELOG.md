@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.0.2
+
+- Declare the PyPI package as the repository's lifecycle release artifact.
+
 ## 3.0.1
 
 - Make ship own verified remote release publication while keeping deployment

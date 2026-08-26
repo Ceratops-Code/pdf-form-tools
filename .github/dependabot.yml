@@ -10,5 +10,14 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+    groups:
+      codeql-action-version-updates:
+        applies-to: version-updates
+        patterns:
+          - "github/codeql-action/*"
+      codeql-action-security-updates:
+        applies-to: security-updates
+        patterns:
+          - "github/codeql-action/*"
     labels:
       - dependencies

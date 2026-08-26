@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pdf-form-tools"
-version = "3.0.1"
+version = "3.0.2"
 description = "Template-aware tools for filling scanned PDF forms with visual verification"
 readme = "README.md"
 requires-python = ">=3.11"

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Unify local deployment, release publication, and artifact identity in
+  `sdlc/sdlc.yml`.
+
 ## 3.0.3
 
 - Allow CI and repository validation workflows to be dispatched manually for

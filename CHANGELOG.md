@@ -1,9 +1,11 @@
 # Changelog
 
-## Unreleased
+## 3.0.4
 
 - Unify local deployment, release publication, and artifact identity in
   `sdlc/sdlc.yml`.
+- Publish PyPI packages and GitHub Releases through GitHub Actions, with local
+  tag orchestration and verified completion before deployment.
 
 ## 3.0.3
 

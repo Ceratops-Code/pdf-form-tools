@@ -28,7 +28,8 @@ release:
             - --check-only
     publish:
       steps:
-        - id: publish-and-verify-release
+        - id: trigger-and-verify-release
           run:
             - python
             - scripts/publish_current_version.py
+            - --trigger-release

@@ -434,48 +434,23 @@ def test_release_preflight_constructs_checks_without_push(
     )
 
 
-def test_release_pushes_exact_head_to_new_version_tag(
+def test_release_publication_is_rejected_outside_github_actions(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
     _configure_release_project(tmp_path, monkeypatch)
-    head = "b" * 40
-    run = Mock(
-        side_effect=[
-            subprocess.CompletedProcess([], 0, stdout=""),
-            subprocess.CompletedProcess([], 0, stdout=f"{head}\n"),
-            subprocess.CompletedProcess([], 0, stdout=""),
-            subprocess.CompletedProcess([], 0, stdout=""),
-        ]
-    )
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    run = Mock()
     monkeypatch.setattr(publisher.subprocess, "run", run)
-    registry_check = Mock(side_effect=[False, True])
-    release_check = Mock(side_effect=[None, _published_release()])
-    workflow_wait = Mock(return_value={"status": "completed", "conclusion": "success"})
-    registry_wait = Mock()
-    ensure_release = Mock()
-    monkeypatch.setattr(publisher, "_version_is_published", registry_check)
-    monkeypatch.setattr(publisher, "_github_release", release_check)
-    monkeypatch.setattr(publisher, "_wait_for_workflow", workflow_wait)
-    monkeypatch.setattr(publisher, "_wait_for_pypi", registry_wait)
-    monkeypatch.setattr(publisher, "_ensure_github_release", ensure_release)
 
-    exit_code = publisher.main([])
+    exit_code = publisher.main(["--github-actions-release"])
 
-    assert exit_code == 0
-    assert capsys.readouterr().out == "OK\n"
-    assert run.call_args_list[-1].args[0] == [
-        "git",
-        "push",
-        "origin",
-        f"{head}:refs/tags/v2.2.0",
-    ]
-    workflow_wait.assert_called_once_with(head, "v2.2.0")
-    registry_wait.assert_called_once_with("pdf-form-tools", "2.2.0")
-    ensure_release.assert_called_once_with(
-        "ceratops-code/pdf-form-tools",
-        "v2.2.0",
-        "- Release notes.",
-    )
+    assert exit_code == 1
+    assert json.loads(capsys.readouterr().out) == {
+        "stage": "publication_context",
+        "exit_code": 1,
+        "tag": "v2.2.0",
+    }
+    run.assert_not_called()
 
 
 def test_release_retry_accepts_only_the_same_remote_commit(
@@ -496,19 +471,20 @@ def test_release_retry_accepts_only_the_same_remote_commit(
     )
     registry_check = Mock(return_value=True)
     release_check = Mock(return_value=_published_release())
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_REF", "refs/tags/v2.2.0")
+    monkeypatch.setenv("GITHUB_REF_NAME", "v2.2.0")
     monkeypatch.setattr(publisher.subprocess, "run", run)
     monkeypatch.setattr(publisher, "_version_is_published", registry_check)
     monkeypatch.setattr(publisher, "_github_release", release_check)
 
-    exit_code = publisher.main([])
+    exit_code = publisher.main(["--github-actions-release"])
 
     assert exit_code == 0
     assert capsys.readouterr().out == "OK\n"
     assert run.call_count == 3
-    registry_check.assert_called_once_with("pdf-form-tools", "2.2.0")
-    release_check.assert_called_once_with(
-        "ceratops-code/pdf-form-tools", "v2.2.0"
-    )
+    assert registry_check.call_count == 2
+    assert release_check.call_count == 2
 
 
 def test_release_retry_completes_an_interrupted_tag_publish(
@@ -527,47 +503,28 @@ def test_release_retry_completes_an_interrupted_tag_publish(
             ),
         ]
     )
-    registry_check = Mock(side_effect=[False, True])
-    release_check = Mock(
-        side_effect=[None, None, _published_release(), _published_release()]
-    )
-    workflow_wait = Mock(return_value={"status": "completed", "conclusion": "success"})
-    registry_wait = Mock()
+    registry_check = Mock(return_value=True)
+    release_check = Mock(side_effect=[None, _published_release(), _published_release()])
     gh = Mock(return_value="")
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_REF", "refs/tags/v2.2.0")
+    monkeypatch.setenv("GITHUB_REF_NAME", "v2.2.0")
     monkeypatch.setattr(publisher.subprocess, "run", run)
     monkeypatch.setattr(publisher, "_version_is_published", registry_check)
     monkeypatch.setattr(publisher, "_github_release", release_check)
-    monkeypatch.setattr(publisher, "_wait_for_workflow", workflow_wait)
-    monkeypatch.setattr(publisher, "_wait_for_pypi", registry_wait)
     monkeypatch.setattr(publisher, "_gh", gh)
 
-    exit_code = publisher.main([])
+    exit_code = publisher.main(["--github-actions-release"])
 
     assert exit_code == 0
     assert capsys.readouterr().out == "OK\n"
     assert run.call_count == 3
-    workflow_wait.assert_called_once_with(head, "v2.2.0")
-    registry_wait.assert_called_once_with("pdf-form-tools", "2.2.0")
     assert gh.call_args.args[:4] == (
         "github_release_create",
         "release",
         "create",
         "v2.2.0",
     )
-
-
-def test_release_wait_rejects_a_failed_tag_workflow(monkeypatch) -> None:
-    monkeypatch.setattr(
-        publisher,
-        "_workflow_run",
-        Mock(return_value={"status": "completed", "conclusion": "failure"}),
-    )
-
-    with pytest.raises(publisher.PublishError) as captured:
-        publisher._wait_for_workflow("a" * 40, "v2.2.0")
-
-    assert captured.value.stage == "workflow"
-    assert captured.value.exit_code == 1
 
 
 def test_release_rejects_existing_pypi_version_with_compact_json(
@@ -585,7 +542,7 @@ def test_release_rejects_existing_pypi_version_with_compact_json(
     monkeypatch.setattr(publisher.subprocess, "run", run)
     monkeypatch.setattr(publisher, "_version_is_published", Mock(return_value=True))
 
-    exit_code = publisher.main([])
+    exit_code = publisher.main(["--check-only"])
 
     assert exit_code == 1
     assert json.loads(capsys.readouterr().out) == {
@@ -613,11 +570,11 @@ def test_release_rejects_conflicting_remote_tag(
             ),
         ]
     )
-    registry_check = Mock()
+    registry_check = Mock(return_value=True)
     monkeypatch.setattr(publisher.subprocess, "run", run)
     monkeypatch.setattr(publisher, "_version_is_published", registry_check)
 
-    exit_code = publisher.main([])
+    exit_code = publisher.main(["--check-only"])
 
     assert exit_code == 1
     assert json.loads(capsys.readouterr().out) == {
@@ -627,3 +584,101 @@ def test_release_rejects_conflicting_remote_tag(
     }
     assert run.call_count == 3
     registry_check.assert_not_called()
+
+
+@pytest.mark.parametrize("existing_tag", [False, True])
+def test_local_release_triggers_once_and_verifies_actions_results(
+    tmp_path: Path, monkeypatch, capsys, existing_tag: bool
+) -> None:
+    _configure_release_project(tmp_path, monkeypatch)
+    head = "b" * 40
+    run = Mock(side_effect=[
+        subprocess.CompletedProcess([], 0, stdout=""),
+        subprocess.CompletedProcess([], 0, stdout=head),
+        subprocess.CompletedProcess(
+            [], 0, stdout=f"{head}\trefs/tags/v2.2.0" if existing_tag else ""
+        ),
+        subprocess.CompletedProcess([], 0, stdout=""),
+    ])
+    monkeypatch.setattr(publisher.subprocess, "run", run)
+    registry = Mock(side_effect=[True] if existing_tag else [False, True])
+    releases = Mock(side_effect=[_published_release()] if existing_tag else [None, _published_release()])
+    events = []
+    workflow = Mock(side_effect=lambda *args: events.append("workflow"))
+    pypi = Mock(side_effect=lambda *args: events.append("pypi"))
+    create = Mock()
+    monkeypatch.setattr(publisher, "_version_is_published", registry)
+    monkeypatch.setattr(publisher, "_github_release", releases)
+    monkeypatch.setattr(publisher, "_wait_for_workflow", workflow)
+    monkeypatch.setattr(publisher, "_wait_for_pypi", pypi)
+    monkeypatch.setattr(publisher, "_ensure_github_release", create)
+
+    assert publisher.main(["--trigger-release"]) == 0
+    assert capsys.readouterr().out == "OK\n"
+    pushes = [call.args[0] for call in run.call_args_list if call.args[0][:2] == ["git", "push"]]
+    assert pushes == ([] if existing_tag else [["git", "push", "origin", f"{head}:refs/tags/v2.2.0"]])
+    assert events == ["workflow", "pypi"]
+    workflow.assert_called_once_with(head, "v2.2.0")
+    pypi.assert_called_once_with("pdf-form-tools", "2.2.0")
+    create.assert_not_called()
+
+
+@pytest.mark.parametrize("conclusion", ["failure", "cancelled"])
+def test_failed_actions_release_stops_local_completion(
+    tmp_path: Path, monkeypatch, capsys, conclusion: str
+) -> None:
+    _configure_release_project(tmp_path, monkeypatch)
+    head = "a" * 40
+    monkeypatch.setattr(publisher, "_git", Mock(side_effect=["", head]))
+    monkeypatch.setattr(publisher, "_remote_tag_target", Mock(return_value=head))
+    monkeypatch.setattr(publisher, "_workflow_run", Mock(return_value={
+        "headSha": head, "status": "completed", "conclusion": conclusion
+    }))
+    pypi, release = Mock(), Mock()
+    monkeypatch.setattr(publisher, "_wait_for_pypi", pypi)
+    monkeypatch.setattr(publisher, "_ensure_github_release", release)
+
+    assert publisher.main(["--trigger-release"]) == 1
+    assert json.loads(capsys.readouterr().out)["stage"] == "workflow"
+    pypi.assert_not_called()
+    release.assert_not_called()
+
+
+@pytest.mark.parametrize("published_release", [None, {"draft": True}])
+def test_local_release_requires_a_verified_public_github_release(
+    tmp_path: Path, monkeypatch, capsys, published_release
+) -> None:
+    _configure_release_project(tmp_path, monkeypatch)
+    head = "a" * 40
+    monkeypatch.setattr(publisher, "_git", Mock(side_effect=["", head]))
+    monkeypatch.setattr(publisher, "_remote_tag_target", Mock(return_value=head))
+    monkeypatch.setattr(publisher, "_wait_for_workflow", Mock())
+    monkeypatch.setattr(publisher, "_wait_for_pypi", Mock())
+    monkeypatch.setattr(publisher, "_version_is_published", Mock(return_value=True))
+    monkeypatch.setattr(publisher, "_github_release", Mock(return_value=published_release))
+    create = Mock()
+    monkeypatch.setattr(publisher, "_ensure_github_release", create)
+
+    assert publisher.main(["--trigger-release"]) == 1
+    assert json.loads(capsys.readouterr().out)["stage"] == "github_release_verify"
+    create.assert_not_called()
+
+
+def test_release_workflow_lookup_is_bound_to_exact_tag_and_commit(monkeypatch) -> None:
+    head = "a" * 40
+    gh = Mock(return_value=json.dumps([{
+        "headSha": head, "status": "completed", "conclusion": "success"
+    }]))
+    monkeypatch.setattr(publisher, "_gh", gh)
+
+    assert publisher._workflow_run(head, "v2.2.0")["conclusion"] == "success"
+    arguments = gh.call_args.args
+    assert arguments[arguments.index("--workflow") + 1] == "publish-pypi.yml"
+    assert arguments[arguments.index("--event") + 1] == "push"
+    assert arguments[arguments.index("--branch") + 1] == "v2.2.0"
+    assert arguments[arguments.index("--commit") + 1] == head
+
+
+def test_release_modes_cannot_be_combined(capsys) -> None:
+    assert publisher.main(["--trigger-release", "--github-actions-release"]) == 2
+    assert json.loads(capsys.readouterr().out)["stage"] == "arguments"

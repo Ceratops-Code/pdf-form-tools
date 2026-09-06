@@ -21,13 +21,16 @@ success or compact JSON identifying the failed stage and evidence file.
 ## Releases
 
 Document the release in `CHANGELOG.md` and set the next semantic version in
-`pyproject.toml` before promotion. Ship runs the release preflight before its
-first remote mutation and rejects an existing PyPI version or a conflicting
-remote tag. After merge and synchronization, ship pushes the exact synchronized
-commit to its `v<version>` tag, waits for the trusted-publishing workflow,
-verifies PyPI, then creates and verifies the public GitHub release from the
-matching changelog entry. Only after release publication succeeds does ship run
-the local-only `deploy` operation.
+`pyproject.toml` before promotion. `sdlc/sdlc.yml` owns release preflight,
+publication orchestration, artifact identity, and local deployment. Ship runs
+preflight before its first remote mutation and rejects an existing PyPI version
+or a conflicting remote tag. After merge and synchronization, the release helper's
+`--trigger-release` mode pushes the exact synchronized commit to its `v<version>`
+tag and waits for `.github/workflows/publish-pypi.yml`. That workflow publishes
+with PyPI trusted publishing, then creates the public GitHub Release from the
+matching changelog entry using `--github-actions-release`. Local orchestration
+verifies both published results before ship runs the local-only `deploy`
+operation. The workflow filename remains bound to the existing PyPI publisher.
 
 ## Pull requests
 

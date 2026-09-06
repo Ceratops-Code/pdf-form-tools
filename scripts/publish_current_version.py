@@ -1,17 +1,16 @@
-"""Publish and verify the current project release end to end.
+"""Preflight, trigger, or finish the current project release.
 
-The version, package name, repository, and release notes come from tracked
-project metadata. Preflight is read-only. Publication pushes the exact clean
-HEAD to its version tag, waits for the tag-triggered trusted-publishing workflow,
-verifies PyPI, creates the matching public GitHub release, and verifies the
-result. Every completed boundary is safe to retry; stdout remains ``OK`` or one
-compact failure object for the repository lifecycle operation runner.
+Local orchestration pushes the exact clean HEAD to its version tag, waits for
+the tag-triggered workflow, and verifies PyPI and the public GitHub Release.
+Only the GitHub Actions mode creates a release; package upload belongs to the
+workflow. Retrying orchestration reuses the same tag and workflow.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -321,54 +320,54 @@ def _ensure_github_release(
         raise PublishError("github_release_verify", 1)
 
 
-def publish_current_version(*, check_only: bool) -> int:
-    """Preflight or complete the current release through verified boundaries."""
+def _assert_github_actions_tag(tag: str) -> None:
+    """Require the canonical workflow's exact tag execution context."""
+
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        raise PublishError("publication_context", 1)
+    reference = os.environ.get("GITHUB_REF", "")
+    reference_name = os.environ.get("GITHUB_REF_NAME", "")
+    if reference != f"refs/tags/{tag}" or reference_name != tag:
+        raise PublishError("publication_tag", 1)
+
+
+def publish_current_version(
+    *, check_only: bool, github_actions_release: bool, trigger_release: bool
+) -> int:
+    """Preflight, orchestrate locally, or finish the exact Actions release."""
 
     tag: str | None = None
     try:
-        if _git("git_status", "status", "--porcelain"):
-            raise PublishError("working_tree", 1)
         name, version, repository = _project_identity()
         notes = _changelog_notes(version)
-        _gh(
-            "github_preflight",
-            "workflow",
-            "view",
-            WORKFLOW,
-            "--repo",
-            repository,
-        )
         tag = f"v{version}"
+        if github_actions_release:
+            _assert_github_actions_tag(tag)
+        if _git("git_status", "status", "--porcelain"):
+            raise PublishError("working_tree", 1)
         head = _git("head", "rev-parse", "HEAD")
         remote_target = _remote_tag_target(tag)
         if remote_target is not None and remote_target != head:
             raise PublishError("tag_conflict", 1)
 
-        if remote_target is None:
+        if (check_only or trigger_release) and remote_target is None:
             if _version_is_published(name, version):
                 raise PublishError("pypi_version", 1)
             if _github_release(repository, tag) is not None:
                 raise PublishError("github_release_conflict", 1)
-            if check_only:
-                print("OK")
-                return 0
-            _git("push", "push", REMOTE, f"{head}:refs/tags/{tag}")
-            _wait_for_workflow(head, tag)
-            _wait_for_pypi(name, version)
-        elif check_only:
+        if check_only:
             print("OK")
             return 0
-        else:
-            published = _version_is_published(name, version)
-            existing_release = _github_release(repository, tag)
-            if published and _public_release(existing_release, tag):
-                print("OK")
-                return 0
-            if not published:
-                _wait_for_workflow(head, tag)
-                _wait_for_pypi(name, version)
+        if trigger_release:
+            if remote_target is None:
+                _git("push", "push", REMOTE, f"{head}:refs/tags/{tag}")
+            _wait_for_workflow(head, tag)
+        elif remote_target is None:
+            raise PublishError("tag_missing", 1)
 
-        _ensure_github_release(repository, tag, notes)
+        _wait_for_pypi(name, version)
+        if github_actions_release:
+            _ensure_github_release(repository, tag, notes)
         if not _version_is_published(name, version):
             raise PublishError("pypi_verify", 1)
         if not _public_release(_github_release(repository, tag), tag):
@@ -382,13 +381,20 @@ def publish_current_version(*, check_only: bool) -> int:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = CompactArgumentParser(add_help=False)
-    parser.add_argument("--check-only", action="store_true")
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--check-only", action="store_true")
+    mode.add_argument("--github-actions-release", action="store_true")
+    mode.add_argument("--trigger-release", action="store_true")
     try:
         options = parser.parse_args(sys.argv[1:] if argv is None else argv)
     except PublishError as error:
         _emit_failure(error.stage, error.exit_code)
         return error.exit_code
-    return publish_current_version(check_only=options.check_only)
+    return publish_current_version(
+        check_only=options.check_only,
+        github_actions_release=options.github_actions_release,
+        trigger_release=options.trigger_release,
+    )
 
 
 if __name__ == "__main__":

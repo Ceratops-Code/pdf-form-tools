@@ -62,6 +62,6 @@ deliverables:
           no-op: Repository validation covers the local package source and metadata.
         install:
           requires:
-            capabilities: [python]
+            capabilities: [python, uv]
           steps:
             - run: [python, scripts/deploy_local_package.py]

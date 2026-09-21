@@ -1,8 +1,9 @@
 """Build and install this package into the running Python interpreter.
 
-The helper snapshots current tracked files into temporary storage, builds one
-wheel there, force-installs that exact wheel with ``sys.executable``, verifies
-the installed version, and removes all temporary paths on success or failure.
+The helper snapshots current tracked files into temporary storage, uses ``uv``
+to build one wheel there, installs that exact wheel into ``sys.executable``,
+verifies the installed version, and removes all temporary paths on success or
+failure. The target interpreter does not need to contain ``pip``.
 """
 
 from __future__ import annotations
@@ -163,6 +164,9 @@ def deploy_local_package() -> None:
 
     repository_root = _resolved_repository()
     name, expected_version = _project_identity(repository_root)
+    uv = shutil.which("uv")
+    if uv is None:
+        raise DeployFailure("prerequisite", INTERNAL_ERROR, "uv is unavailable")
     try:
         with tempfile.TemporaryDirectory(prefix="pdf-form-tools-deploy-") as temporary:
             temporary_root = pathlib.Path(temporary)
@@ -173,13 +177,10 @@ def deploy_local_package() -> None:
             _run_stage(
                 "build",
                 [
-                    sys.executable,
-                    "-m",
-                    "pip",
-                    "--disable-pip-version-check",
-                    "wheel",
-                    "--no-deps",
-                    "--wheel-dir",
+                    uv,
+                    "build",
+                    "--wheel",
+                    "--out-dir",
                     str(output_dir),
                     ".",
                 ],
@@ -195,12 +196,12 @@ def deploy_local_package() -> None:
             _run_stage(
                 "install",
                 [
-                    sys.executable,
-                    "-m",
+                    uv,
                     "pip",
-                    "--disable-pip-version-check",
                     "install",
-                    "--force-reinstall",
+                    "--python",
+                    sys.executable,
+                    "--reinstall",
                     "--no-deps",
                     str(wheels[0]),
                 ],

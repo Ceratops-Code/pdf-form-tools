@@ -8,6 +8,8 @@ repository:
       version-from:
         file: pyproject.toml
         key: project.requires-python
+    uv:
+      executable: uv
     git:
       executable: git
     gh:
@@ -15,14 +17,14 @@ repository:
   actions:
     validate:
       requires:
-        capabilities: [python]
+        capabilities: [python, uv]
       steps:
-        - run: [python, -m, ruff, check, .]
+        - run: [uv, run, --no-project, --python, "3.11", --with=ruff, --with-editable, ., python, -m, ruff, check, .]
     test:
       requires:
-        capabilities: [python]
+        capabilities: [python, uv]
       steps:
-        - run: [python, -m, pytest, -W, "error::DeprecationWarning"]
+        - run: [uv, run, --no-project, --python, "3.11", --with=pytest, --with-editable, ., python, -m, pytest, -W, "error::DeprecationWarning"]
 
 deliverables:
   packages:

@@ -40,9 +40,9 @@ deliverables:
       actions:
         build:
           requires:
-            capabilities: [python]
+            capabilities: [python, uv]
           steps:
-            - run: [python, -m, build, --outdir, dist]
+            - run: [uv, build, --out-dir, dist]
         publish:
           requires:
             capabilities: [python, git, gh]

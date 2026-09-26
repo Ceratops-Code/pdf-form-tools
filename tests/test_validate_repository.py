@@ -177,6 +177,8 @@ def test_local_deploy_builds_and_installs_exact_temporary_wheel(
         encoding="utf-8",
     )
     monkeypatch.setattr(local_deployer, "REPOSITORY_ROOT", repository)
+    uv = str(tmp_path / "uv")
+    monkeypatch.setattr(local_deployer.shutil, "which", Mock(return_value=uv))
     installed_version = Mock(return_value="2.4.1")
     monkeypatch.setattr(local_deployer.importlib.metadata, "version", installed_version)
     source_dir: Path | None = None
@@ -209,7 +211,7 @@ def test_local_deploy_builds_and_installs_exact_temporary_wheel(
     assert [call.args[0] for call in run.call_args_list] == [
         ["git", "ls-files", "-z"],
         [
-            local_deployer.shutil.which("uv"),
+            uv,
             "build",
             "--wheel",
             "--out-dir",
@@ -217,7 +219,7 @@ def test_local_deploy_builds_and_installs_exact_temporary_wheel(
             ".",
         ],
         [
-            local_deployer.shutil.which("uv"),
+            uv,
             "pip",
             "install",
             "--python",
@@ -257,6 +259,9 @@ def test_local_deploy_rejects_missing_wheel_before_install(
         encoding="utf-8",
     )
     monkeypatch.setattr(local_deployer, "REPOSITORY_ROOT", repository)
+    monkeypatch.setattr(
+        local_deployer.shutil, "which", Mock(return_value=str(tmp_path / "uv"))
+    )
 
     def successful_run(command: list[str], **kwargs) -> subprocess.CompletedProcess:
         if command == ["git", "ls-files", "-z"]:
@@ -287,6 +292,9 @@ def test_local_deploy_rejects_installed_version_mismatch(
         encoding="utf-8",
     )
     monkeypatch.setattr(local_deployer, "REPOSITORY_ROOT", repository)
+    monkeypatch.setattr(
+        local_deployer.shutil, "which", Mock(return_value=str(tmp_path / "uv"))
+    )
 
     def successful_run(command: list[str], **kwargs) -> subprocess.CompletedProcess:
         if command == ["git", "ls-files", "-z"]:

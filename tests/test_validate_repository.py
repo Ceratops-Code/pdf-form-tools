@@ -177,6 +177,8 @@ def test_local_deploy_builds_and_installs_exact_temporary_wheel(
         encoding="utf-8",
     )
     monkeypatch.setattr(local_deployer, "REPOSITORY_ROOT", repository)
+    uv = str(tmp_path / "uv")
+    monkeypatch.setattr(local_deployer.shutil, "which", Mock(return_value=uv))
     installed_version = Mock(return_value="2.4.1")
     monkeypatch.setattr(local_deployer.importlib.metadata, "version", installed_version)
     source_dir: Path | None = None
@@ -189,9 +191,9 @@ def test_local_deploy_builds_and_installs_exact_temporary_wheel(
             return subprocess.CompletedProcess(
                 command, 0, stdout="pyproject.toml\0", stderr=""
             )
-        if "wheel" in command:
+        if len(command) > 2 and command[1:3] == ["build", "--wheel"]:
             source_dir = Path(kwargs["cwd"])
-            output_dir = Path(command[command.index("--wheel-dir") + 1])
+            output_dir = Path(command[command.index("--out-dir") + 1])
             wheel = output_dir / "pdf_form_tools-2.4.1-py3-none-any.whl"
             wheel.write_text("wheel", encoding="utf-8")
             (source_dir / "build").mkdir()
@@ -209,23 +211,20 @@ def test_local_deploy_builds_and_installs_exact_temporary_wheel(
     assert [call.args[0] for call in run.call_args_list] == [
         ["git", "ls-files", "-z"],
         [
-            sys.executable,
-            "-m",
-            "pip",
-            "--disable-pip-version-check",
-            "wheel",
-            "--no-deps",
-            "--wheel-dir",
+            uv,
+            "build",
+            "--wheel",
+            "--out-dir",
             str(output_dir),
             ".",
         ],
         [
-            sys.executable,
-            "-m",
+            uv,
             "pip",
-            "--disable-pip-version-check",
             "install",
-            "--force-reinstall",
+            "--python",
+            sys.executable,
+            "--reinstall",
             "--no-deps",
             str(wheel),
         ],
@@ -260,6 +259,9 @@ def test_local_deploy_rejects_missing_wheel_before_install(
         encoding="utf-8",
     )
     monkeypatch.setattr(local_deployer, "REPOSITORY_ROOT", repository)
+    monkeypatch.setattr(
+        local_deployer.shutil, "which", Mock(return_value=str(tmp_path / "uv"))
+    )
 
     def successful_run(command: list[str], **kwargs) -> subprocess.CompletedProcess:
         if command == ["git", "ls-files", "-z"]:
@@ -290,14 +292,17 @@ def test_local_deploy_rejects_installed_version_mismatch(
         encoding="utf-8",
     )
     monkeypatch.setattr(local_deployer, "REPOSITORY_ROOT", repository)
+    monkeypatch.setattr(
+        local_deployer.shutil, "which", Mock(return_value=str(tmp_path / "uv"))
+    )
 
     def successful_run(command: list[str], **kwargs) -> subprocess.CompletedProcess:
         if command == ["git", "ls-files", "-z"]:
             return subprocess.CompletedProcess(
                 command, 0, stdout="pyproject.toml\0", stderr=""
             )
-        if "wheel" in command:
-            output_dir = Path(command[command.index("--wheel-dir") + 1])
+        if len(command) > 2 and command[1:3] == ["build", "--wheel"]:
+            output_dir = Path(command[command.index("--out-dir") + 1])
             (output_dir / "pdf_form_tools-2.4.1-py3-none-any.whl").write_text(
                 "wheel", encoding="utf-8"
             )

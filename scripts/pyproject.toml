@@ -1,0 +1,21 @@
+[project]
+name = "repository-tools"
+version = "0.0.0"
+requires-python = ">=3.11"
+dependencies = ["mypy", "pdf-form-tools[dev]", "ruff"]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+pdf-form-tools = { path = "..", editable = true }
+
+[tool.uv.workspace]
+members = []
+
+[tool.mypy]
+files = ["."]
+exclude = ["(^|/)\\.venv/"]
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_unused_configs = true

@@ -19,6 +19,11 @@ CHECK_DEFINITIONS = [{'id': 'pdf-form-tools-validator',
               '{temp}/pdf-validation.log'],
   'cwd': '.',
   'exclusive': True,
+  'python_packages': []},
+ {'id': 'actionlint',
+  'command': ['{python}', 'scripts/run-actionlint.py'],
+  'cwd': '.',
+  'exclusive': False,
   'python_packages': []}]
 COMMAND_NOT_FOUND_EXIT_CODE = 127
 

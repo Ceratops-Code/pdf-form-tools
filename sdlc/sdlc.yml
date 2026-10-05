@@ -1,6 +1,5 @@
 version: 4
 kind: ceratops-sdlc
-
 repository:
   capabilities:
     python:
@@ -17,15 +16,45 @@ repository:
   actions:
     validate:
       requires:
-        capabilities: [python, uv]
+        capabilities:
+          - uv
       steps:
-        - run: [uv, run, --no-project, --python, "3.11", --with=ruff, --with-editable, ., python, -m, ruff, check, .]
+        - run:
+            - uv
+            - run
+            - --locked
+            - scripts/validate-repository.py
     test:
       requires:
-        capabilities: [python, uv]
+        capabilities:
+          - python
+          - uv
       steps:
-        - run: [uv, run, --no-project, --python, "3.11", --with=pytest, --with-editable, ., python, -m, pytest, -W, "error::DeprecationWarning"]
-
+        - run:
+            - uv
+            - run
+            - --no-project
+            - --python
+            - '3.11'
+            - --with=pytest
+            - --with-editable
+            - .
+            - python
+            - -m
+            - pytest
+            - -W
+            - error::DeprecationWarning
+    bootstrap:
+      requires:
+        capabilities:
+          - uv
+      steps:
+        - run:
+            - uv
+            - sync
+            - --project
+            - scripts
+            - --locked
 deliverables:
   packages:
     pdf-form-tools:
@@ -40,28 +69,27 @@ deliverables:
       actions:
         build:
           requires:
-            capabilities: [python, uv]
+            capabilities:
+              - python
+              - uv
           steps:
-            - run: [uv, build, --out-dir, dist]
+            - run:
+                - uv
+                - build
+                - --out-dir
+                - dist
         publish:
           requires:
-            capabilities: [python, git, gh]
+            capabilities:
+              - python
+              - git
+              - gh
           steps:
-            - run: [python, scripts/publish_current_version.py, --check-only]
-            - run: [python, scripts/publish_current_version.py, --trigger-release]
-
-  tools:
-    pdf-form-tools:
-      source: src/pdf_form_tools
-      manifest: pyproject.toml
-      prerequisites: [pdf-form-tools]
-      actions:
-        validate:
-          requires:
-            capabilities: []
-          no-op: Repository validation covers the local package source and metadata.
-        install:
-          requires:
-            capabilities: [python, uv]
-          steps:
-            - run: [python, scripts/deploy_local_package.py]
+            - run:
+                - python
+                - scripts/publish_current_version.py
+                - --check-only
+            - run:
+                - python
+                - scripts/publish_current_version.py
+                - --trigger-release

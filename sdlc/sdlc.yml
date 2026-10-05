@@ -49,19 +49,3 @@ deliverables:
           steps:
             - run: [python, scripts/publish_current_version.py, --check-only]
             - run: [python, scripts/publish_current_version.py, --trigger-release]
-
-  tools:
-    pdf-form-tools:
-      source: src/pdf_form_tools
-      manifest: pyproject.toml
-      prerequisites: [pdf-form-tools]
-      actions:
-        validate:
-          requires:
-            capabilities: []
-          no-op: Repository validation covers the local package source and metadata.
-        install:
-          requires:
-            capabilities: [python, uv]
-          steps:
-            - run: [python, scripts/deploy_local_package.py]

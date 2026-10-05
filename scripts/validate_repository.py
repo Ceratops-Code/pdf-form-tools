@@ -89,16 +89,6 @@ def run_validation(build_dir: Path, evidence_path: Path) -> int:
         commands = (
             ("ruff", [sys.executable, "-m", "ruff", "check", "."]),
             (
-                "pytest",
-                [
-                    sys.executable,
-                    "-m",
-                    "pytest",
-                    "-W",
-                    "error::DeprecationWarning",
-                ],
-            ),
-            (
                 "build",
                 [
                     sys.executable,

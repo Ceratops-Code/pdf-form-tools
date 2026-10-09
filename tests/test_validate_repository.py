@@ -51,13 +51,6 @@ def test_commands_use_isolated_artifacts_and_preserve_paths_with_spaces(
     assert capsys.readouterr().out == "OK\n"
     assert [call.args[0] for call in run.call_args_list] == [
         [sys.executable, "-m", "ruff", "check", "."],
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            "-W",
-            "error::DeprecationWarning",
-        ],
         [sys.executable, "-m", "build", "--outdir", str(build_dir)],
         [
             sys.executable,
@@ -75,7 +68,7 @@ def test_commands_use_isolated_artifacts_and_preserve_paths_with_spaces(
         assert call.kwargs["check"] is False
         assert Path(call.kwargs["stdout"].name) == evidence_path
     assert str(stale_artifact) not in run.call_args_list[-1].args[0]
-    assert evidence_path.read_text(encoding="utf-8").count("output from") == 4
+    assert evidence_path.read_text(encoding="utf-8").count("output from") == 3
 
 
 def test_failure_is_compact_json_and_stops_later_stages(
@@ -104,7 +97,7 @@ def test_failure_is_compact_json_and_stops_later_stages(
     assert exit_code == 7
     assert output == json.dumps(
         {
-            "stage": "pytest",
+            "stage": "build",
             "exit_code": 7,
             "evidence_path": str(evidence_path),
         },
@@ -161,7 +154,7 @@ def test_successful_build_without_artifacts_fails_before_twine(
 
     assert exit_code == validator.INTERNAL_ERROR
     assert json.loads(capsys.readouterr().out)["stage"] == "build"
-    assert run.call_count == 3
+    assert run.call_count == 2
     assert "No package artifacts were created." in evidence_path.read_text(
         encoding="utf-8"
     )

@@ -19,7 +19,7 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
       - name: Validate repository
-        uses: Ceratops-Code/Ceratops-AI-Agents-Kit/skills/ceratops-repo-lifecycle/scripts@8d9cb0db6a250da517c8caea48c5bf8a7943d9ff # revision 8d9cb0db6a25
+        uses: Ceratops-Code/Ceratops-AI-Agents-Kit/skills/ceratops-repo-lifecycle/scripts@c0b07f52f2448d61577e17567366c7c54ccc2752 # revision 8d9cb0db6a25
         with:
           repo-root: ${{ github.workspace }}
           evidence-file: ${{ runner.temp }}/repository-validation.log

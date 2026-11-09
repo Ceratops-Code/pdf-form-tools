@@ -1,11 +1,11 @@
 version: 5
 kind: ceratops-sdlc
 repository:
-  capabilities:
+  tools:
     python:
       executable: python
       version-from:
-        file: pyproject.toml
+        file: scripts/pyproject.toml
         key: project.requires-python
     uv:
       executable: uv
@@ -16,19 +16,148 @@ repository:
   actions:
     pre-build-checks:
       check-groups:
-        source:
+        pdf-form-tools-validator:
           requires:
-            capabilities:
+            tools:
               - uv
+              - python
+          validation-tools:
+            - pdf-form-tools-validator
+          check-results:
+            result-owner: operation
+            product-inputs:
+              - src/**
+              - pyproject.toml
+              - README.md
+              - LICENSE
+              - MANIFEST.in
+            check-inputs:
+              - sdlc/sdlc.yml
+              - scripts/pyproject.toml
+              - scripts/validate_repository.py
+              - pyproject.toml
+            dependencies:
+              - scripts/uv.lock
+            environment:
+              - UV_OFFLINE
+              - UV_PYTHON
+              - UV_PYTHON_PREFERENCE
+              - UV_INDEX
+              - UV_DEFAULT_INDEX
+            tools:
+              - uv
+              - python
+          steps:
+            - run: [uv, run, --project, scripts, --locked, python, scripts/validate_repository.py, --package-only]
+        actionlint:
+          requires:
+            tools:
+              - uv
+              - python
+          validation-tools:
+            - actionlint
+          check-results:
+            result-owner: operation
+            product-inputs:
+              - .github/workflows/*.yml
+              - .github/workflows/*.yaml
+              - .github/actions/**
+            check-inputs:
+              - sdlc/sdlc.yml
+              - scripts/pyproject.toml
+              - scripts/run-actionlint.py
+              - .github/actionlint.yaml
+              - .github/actionlint.yml
+            dependencies:
+              - scripts/uv.lock
+            environment:
+              - UV_OFFLINE
+              - UV_PYTHON
+              - UV_PYTHON_PREFERENCE
+              - GITHUB_EVENT_NAME
+              - GITHUB_EVENT_PATH
+              - GITHUB_ACTIONS
+            tools:
+              - uv
+              - python
+          steps:
+            - run: [uv, run, --project, scripts, --locked, python, scripts/run-actionlint.py]
+        ruff:
+          requires:
+            tools:
+              - uv
+              - python
+          validation-tools:
+            - ruff
+          check-results:
+            result-owner: operation
+            product-inputs:
+              - '**/*.py'
+              - '**/*.pyi'
+              - '**/*.ipynb'
+            check-inputs:
+              - sdlc/sdlc.yml
+              - scripts/pyproject.toml
+              - pyproject.toml
+              - .gitignore
+              - '**/.gitignore'
+            dependencies:
+              - scripts/uv.lock
+            environment:
+              - UV_OFFLINE
+              - UV_PYTHON
+              - UV_PYTHON_PREFERENCE
+            tools:
+              - uv
+              - python
+          steps:
+            - run: [uv, run, --project, scripts, --locked, python, -m, ruff, check, ., --config, pyproject.toml]
+        mypy:
+          requires:
+            tools:
+              - uv
+              - python
+          validation-tools:
+            - mypy
+          check-results:
+            result-owner: operation
+            product-inputs:
+              - '**/*.py'
+              - '**/*.pyi'
+              - '**/*.ipynb'
+            check-inputs:
+              - sdlc/sdlc.yml
+              - scripts/pyproject.toml
+              - .gitignore
+              - '**/.gitignore'
+            dependencies:
+              - scripts/uv.lock
+            environment:
+              - UV_OFFLINE
+              - UV_PYTHON
+              - UV_PYTHON_PREFERENCE
+              - MYPYPATH
+            tools:
+              - uv
+              - python
           steps:
             - run:
                 - uv
                 - run
+                - --project
+                - scripts
                 - --locked
-                - scripts/validate-repository.py
+                - python
+                - -m
+                - mypy
+                - --config-file
+                - scripts/pyproject.toml
+                - --explicit-package-bases
+                - scripts
+                - src
         tests:
           requires:
-            capabilities:
+            tools:
               - python
               - uv
           steps:
@@ -48,15 +177,10 @@ repository:
                 - error::DeprecationWarning
     bootstrap:
       requires:
-        capabilities:
+        tools:
           - uv
       steps:
-        - run:
-            - uv
-            - sync
-            - --project
-            - scripts
-            - --locked
+        - run: [uv, sync, --project, scripts, --locked]
 deliverables:
   packages:
     pdf-form-tools:
@@ -71,27 +195,17 @@ deliverables:
       actions:
         build:
           requires:
-            capabilities:
+            tools:
               - python
               - uv
           steps:
-            - run:
-                - uv
-                - build
-                - --out-dir
-                - dist
+            - run: [uv, build, --out-dir, dist]
         publish:
           requires:
-            capabilities:
+            tools:
               - python
               - git
               - gh
           steps:
-            - run:
-                - python
-                - scripts/publish_current_version.py
-                - --check-only
-            - run:
-                - python
-                - scripts/publish_current_version.py
-                - --trigger-release
+            - run: [python, scripts/publish_current_version.py, --check-only]
+            - run: [python, scripts/publish_current_version.py, --trigger-release]

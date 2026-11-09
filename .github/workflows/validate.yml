@@ -24,7 +24,10 @@ jobs:
           repo-root: ${{ github.workspace }}
           evidence-file: ${{ runner.temp }}/repository-validation.log
           operations: |
-            repository.actions.pre-build-checks.check-groups.source
+            repository.actions.pre-build-checks.check-groups.pdf-form-tools-validator
+            repository.actions.pre-build-checks.check-groups.actionlint
+            repository.actions.pre-build-checks.check-groups.ruff
+            repository.actions.pre-build-checks.check-groups.mypy
             repository.actions.pre-build-checks.check-groups.tests
       - name: Upload validation evidence
         if: failure()

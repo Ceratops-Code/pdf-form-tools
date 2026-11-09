@@ -1,4 +1,4 @@
-version: 4
+version: 5
 kind: ceratops-sdlc
 repository:
   capabilities:
@@ -14,36 +14,38 @@ repository:
     gh:
       executable: gh
   actions:
-    validate:
-      requires:
-        capabilities:
-          - uv
-      steps:
-        - run:
-            - uv
-            - run
-            - --locked
-            - scripts/validate-repository.py
-    test:
-      requires:
-        capabilities:
-          - python
-          - uv
-      steps:
-        - run:
-            - uv
-            - run
-            - --no-project
-            - --python
-            - '3.11'
-            - --with=pytest
-            - --with-editable
-            - .
-            - python
-            - -m
-            - pytest
-            - -W
-            - error::DeprecationWarning
+    pre-build-checks:
+      check-groups:
+        source:
+          requires:
+            capabilities:
+              - uv
+          steps:
+            - run:
+                - uv
+                - run
+                - --locked
+                - scripts/validate-repository.py
+        tests:
+          requires:
+            capabilities:
+              - python
+              - uv
+          steps:
+            - run:
+                - uv
+                - run
+                - --no-project
+                - --python
+                - '3.11'
+                - --with=pytest
+                - --with-editable
+                - .
+                - python
+                - -m
+                - pytest
+                - -W
+                - error::DeprecationWarning
     bootstrap:
       requires:
         capabilities:
@@ -58,9 +60,9 @@ repository:
 deliverables:
   packages:
     pdf-form-tools:
-      source: src/pdf_form_tools
+      root-dir: src/pdf_form_tools
       project: pyproject.toml
-      prerequisites: []
+      build-after: []
       artifact:
         type: python-wheel
         distribution: pdf-form-tools

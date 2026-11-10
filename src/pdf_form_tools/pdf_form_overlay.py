@@ -306,6 +306,7 @@ def draw_text(
     width = bbox[2] - bbox[0]
     height = bbox[3] - bbox[1]
 
+    x: float
     if align == "right":
         x = rect.x2 - width - bbox[0]
     elif align == "left":
@@ -372,20 +373,13 @@ def detect_guided_slots(
     col_sum = ink.sum(axis=0)
     peak_columns = [idx for idx, value in enumerate(col_sum) if value >= 8]
     ranges: list[tuple[int, int]] = []
-    start = None
-    prev = None
-    for idx in peak_columns:
-        if start is None:
-            start = idx
+    if peak_columns:
+        start = prev = peak_columns[0]
+        for idx in peak_columns[1:]:
+            if idx != prev + 1:
+                ranges.append((start, prev))
+                start = idx
             prev = idx
-            continue
-        if idx == prev + 1:
-            prev = idx
-            continue
-        ranges.append((start, prev))
-        start = idx
-        prev = idx
-    if start is not None and prev is not None:
         ranges.append((start, prev))
 
     boundaries = [0]

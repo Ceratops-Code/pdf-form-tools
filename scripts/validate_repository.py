@@ -1,10 +1,10 @@
 """Run the repository's local and CI validation pipeline.
 
-The caller installs dependencies and supplies an evidence file plus a build
-directory that does not yet exist. The runner creates that directory so every
-artifact passed to Twine belongs to this invocation. Complete combined output
-from each subprocess is written to the evidence file; stdout is reserved for
-``OK`` or a compact failure object.
+The caller may supply an evidence file and a new build directory. With
+--package-only and no paths, the command owns an isolated temporary directory
+and removes it on exit. Twine checks only the artifacts from this invocation.
+Failures print a compact status and retain diagnostics at the caller’s path or
+print them to stderr before owned scratch is removed.
 """
 
 from __future__ import annotations
@@ -13,9 +13,10 @@ import argparse
 import json
 import subprocess
 import sys
+import tempfile
 from collections.abc import Sequence
 from pathlib import Path
-from typing import TextIO
+from typing import Never, TextIO
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 INTERNAL_ERROR = 2
@@ -28,7 +29,7 @@ class ArgumentError(Exception):
 class CompactArgumentParser(argparse.ArgumentParser):
     """Raise parse errors so the entrypoint can preserve its JSON output contract."""
 
-    def error(self, message: str) -> None:
+    def error(self, message: str) -> Never:
         raise ArgumentError(message)
 
 
@@ -65,7 +66,7 @@ def _run_stage(stage: str, command: list[str], evidence: TextIO) -> int:
     return result.returncode
 
 
-def run_validation(build_dir: Path, evidence_path: Path) -> int:
+def run_validation(build_dir: Path, evidence_path: Path, *, package_only: bool = False) -> int:
     """Run every validation stage and return its process exit code."""
 
     build_dir = build_dir.expanduser().resolve()
@@ -87,7 +88,7 @@ def run_validation(build_dir: Path, evidence_path: Path) -> int:
             return INTERNAL_ERROR
 
         commands = (
-            ("ruff", [sys.executable, "-m", "ruff", "check", "."]),
+            *(() if package_only else (("ruff", [sys.executable, "-m", "ruff", "check", "."]),)),
             (
                 "build",
                 [
@@ -138,10 +139,15 @@ def _argument_value(arguments: Sequence[str], option: str) -> str:
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     parser = CompactArgumentParser(add_help=False)
-    parser.add_argument("--build-dir", required=True, type=Path)
-    parser.add_argument("--evidence-file", required=True, type=Path)
+    parser.add_argument("--build-dir", type=Path)
+    parser.add_argument("--evidence-file", type=Path)
+    parser.add_argument("--package-only", action="store_true")
     try:
         options = parser.parse_args(arguments)
+        if bool(options.build_dir) != bool(options.evidence_file):
+            parser.error("--build-dir and --evidence-file must be supplied together")
+        if not options.package_only and options.build_dir is None:
+            parser.error("--build-dir and --evidence-file are required for the combined check")
     except ArgumentError:
         _emit_failure(
             "arguments",
@@ -149,7 +155,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             _argument_value(arguments, "--evidence-file"),
         )
         return INTERNAL_ERROR
-    return run_validation(options.build_dir, options.evidence_file)
+    if options.build_dir is not None:
+        return run_validation(options.build_dir, options.evidence_file, package_only=options.package_only)
+    # This invocation owns its scratch files. Keep failing subprocess output
+    # available to the caller before the temporary directory is removed.
+    with tempfile.TemporaryDirectory(prefix=".pdf-package-check-") as directory:
+        scratch = Path(directory)
+        evidence = scratch / "package.log"
+        code = run_validation(scratch / "dist", evidence, package_only=True)
+        if code and evidence.exists():
+            print(evidence.read_text(encoding="utf-8", errors="replace"), file=sys.stderr)
+        return code
 
 
 if __name__ == "__main__":

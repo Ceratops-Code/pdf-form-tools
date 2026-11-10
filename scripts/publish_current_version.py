@@ -21,7 +21,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Never
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 REMOTE = "origin"
@@ -46,7 +46,7 @@ class PublishError(Exception):
 class CompactArgumentParser(argparse.ArgumentParser):
     """Raise parse errors so stdout remains machine-readable."""
 
-    def error(self, message: str) -> None:
+    def error(self, message: str) -> Never:
         raise PublishError("arguments", INTERNAL_ERROR)
 
 

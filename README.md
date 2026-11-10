@@ -86,7 +86,8 @@ regions.
 
 ```bash
 python -m pip install -e ".[dev]"
-python scripts/validate_repository.py --build-dir "$BUILD_DIR" --evidence-file "$EVIDENCE_FILE"
+python -m ruff check . --config pyproject.toml
+python scripts/validate_repository.py --package-only --build-dir "$BUILD_DIR" --evidence-file "$EVIDENCE_FILE"
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for validation path requirements and

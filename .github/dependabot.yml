@@ -1,12 +1,14 @@
 version: 2
 updates:
 - package-ecosystem: pip
+  target-branch: release/local
   directory: /
   schedule:
     interval: weekly
   labels:
   - dependencies
 - package-ecosystem: github-actions
+  target-branch: release/local
   directory: /
   schedule:
     interval: weekly
@@ -15,13 +17,29 @@ updates:
       applies-to: version-updates
       patterns:
       - github/codeql-action/*
+  labels:
+  - dependencies
+- package-ecosystem: uv
+  target-branch: release/local
+  directory: /scripts
+  schedule:
+    interval: weekly
+- package-ecosystem: pip
+  directory: /
+  schedule:
+    interval: weekly
+  labels:
+  - dependencies
+  open-pull-requests-limit: 0
+- package-ecosystem: github-actions
+  directory: /
+  schedule:
+    interval: weekly
+  labels:
+  - dependencies
+  open-pull-requests-limit: 0
+  groups:
     codeql-action-security-updates:
       applies-to: security-updates
       patterns:
       - github/codeql-action/*
-  labels:
-  - dependencies
-- package-ecosystem: uv
-  directory: /scripts
-  schedule:
-    interval: weekly

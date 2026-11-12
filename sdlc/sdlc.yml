@@ -164,9 +164,9 @@ repository:
             - run:
                 - uv
                 - run
-                - --no-project
-                - --python
-                - '3.11'
+                - --project
+                - scripts
+                - --locked
                 - --with=pytest
                 - --with-editable
                 - .

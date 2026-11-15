@@ -184,6 +184,9 @@ repository:
 deliverables:
   packages:
     pdf-form-tools:
+      version:
+        file: "pyproject.toml"
+        field: "project.version"
       root-dir: src/pdf_form_tools
       project: pyproject.toml
       build-after: []

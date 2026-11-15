@@ -171,10 +171,12 @@ repository:
                 - --with-editable
                 - .
                 - python
-                - -m
-                - pytest
-                - -W
-                - error::DeprecationWarning
+                - scripts/run-tests.py
+                - --temporary-root
+                - "{temporary_root}"
+                - tests
+                - --pytest-arg=-W
+                - --pytest-arg=error::DeprecationWarning
     bootstrap:
       requires:
         tools:

@@ -39,9 +39,16 @@ DEFAULT_TARGETS: list[str] = ['tests/test_pdf_form_overlay.py', 'tests/test_vali
 
 
 def test_support():
-    """Load delivered test support only when executing tests, never for result readers."""
+    """Load test support without writing launcher bytecode into the checkout."""
     sys.path.insert(0, str(ROOT / "scripts/testing"))
-    return importlib.import_module("reuse_test_results")
+    original_bytecode_setting = sys.dont_write_bytecode
+    try:
+        sys.dont_write_bytecode = True
+        return importlib.import_module("reuse_test_results")
+    finally:
+        sys.dont_write_bytecode = original_bytecode_setting
+
+
 def without_basetemp(arguments: list[str]) -> list[str]:
     """Remove inherited locations before pytest validates every occurrence."""
     options = iter(arguments)

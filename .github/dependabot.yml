@@ -1,6 +1,7 @@
 version: 2
 updates:
 - package-ecosystem: pip
+  open-pull-requests-limit: 0
   target-branch: release/local
   directory: /
   schedule:
@@ -8,6 +9,7 @@ updates:
   labels:
   - dependencies
 - package-ecosystem: github-actions
+  open-pull-requests-limit: 0
   target-branch: release/local
   directory: /
   schedule:
@@ -20,6 +22,7 @@ updates:
   labels:
   - dependencies
 - package-ecosystem: uv
+  open-pull-requests-limit: 0
   target-branch: release/local
   directory: /scripts
   schedule:

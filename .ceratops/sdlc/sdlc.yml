@@ -32,7 +32,7 @@ repository:
               - LICENSE
               - MANIFEST.in
             check-inputs:
-              - sdlc/sdlc.yml
+              - .ceratops/sdlc/sdlc.yml
               - scripts/pyproject.toml
               - scripts/validate_repository.py
               - pyproject.toml
@@ -63,7 +63,7 @@ repository:
               - .github/workflows/*.yaml
               - .github/actions/**
             check-inputs:
-              - sdlc/sdlc.yml
+              - .ceratops/sdlc/sdlc.yml
               - scripts/pyproject.toml
               - scripts/run-actionlint.py
               - .github/actionlint.yaml
@@ -96,7 +96,7 @@ repository:
               - '**/*.pyi'
               - '**/*.ipynb'
             check-inputs:
-              - sdlc/sdlc.yml
+              - .ceratops/sdlc/sdlc.yml
               - scripts/pyproject.toml
               - pyproject.toml
               - .gitignore
@@ -126,7 +126,7 @@ repository:
               - '**/*.pyi'
               - '**/*.ipynb'
             check-inputs:
-              - sdlc/sdlc.yml
+              - .ceratops/sdlc/sdlc.yml
               - scripts/pyproject.toml
               - .gitignore
               - '**/.gitignore'

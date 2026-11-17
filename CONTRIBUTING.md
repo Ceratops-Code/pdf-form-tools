@@ -21,7 +21,7 @@ success or compact JSON identifying the failed stage and evidence file.
 ## Releases
 
 Document the release in `CHANGELOG.md` and set the next semantic version in
-`pyproject.toml` before promotion. `sdlc/sdlc.yml` owns release preflight,
+`pyproject.toml` before promotion. `.ceratops/sdlc/sdlc.yml` owns release preflight,
 publication orchestration, artifact identity, and local deployment. Ship runs
 preflight before its first remote mutation and rejects an existing PyPI version
 or a conflicting remote tag. After merge and synchronization, the release helper's

@@ -84,6 +84,10 @@ regions.
 
 ## Development
 
+`scripts/run-tests.py` keeps the repository-specific tests and scratch cleanup.
+Its generated `scripts/write_check_results.py` stores shared check outcomes;
+individual results append durably, and command boundaries compact the file.
+
 ```bash
 python -m pip install -e ".[dev]"
 python -m ruff check . --config pyproject.toml

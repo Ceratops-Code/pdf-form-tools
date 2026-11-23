@@ -164,7 +164,7 @@ def remove_test_diagnostic(path: pathlib.Path, *, root: pathlib.Path, current: A
                            retired_scope: Mapping[str, Any] | None = None) -> None:
     """Remove a managed report after its own failures have newer saved passes.
 
-    Caller-selected reports outside .ceratops/results/test-diagnostics are user-retained.
+    Caller-selected reports outside .test-diagnostics are user-retained.
     Startup uses only current local results; an old tagged pass never clears a
     later failure. A complete successful command can clear an earlier launch or
     collection error for that same request, which has no individual test result.
@@ -176,7 +176,7 @@ def remove_test_diagnostic(path: pathlib.Path, *, root: pathlib.Path, current: A
         # Neither report exists below a non-directory ancestor. If a later
         # failure needs a report, its writer can explain why saving it failed.
         return
-    if not path.resolve().is_relative_to((root / ".ceratops/results/test-diagnostics").resolve()):
+    if not path.resolve().is_relative_to((root / ".test-diagnostics").resolve()):
         return
     report = _read_test_diagnostic(path, root)
     if report is None:
@@ -481,7 +481,7 @@ class ResultStore:
         self.checkout = _digest(str(self.root))
         # Diagnostic location is observational, never a test acceptance input.
         self.diagnostic_path = pathlib.Path(context.get("diagnosticPath") or
-                                            self.root / ".ceratops/results/test-diagnostics/pytest-failure.json")
+                                            self.root / ".test-diagnostics/pytest-failure.json")
         self.unsaved_reasons: dict[str, str] = {}
         self.qualification_level = context.get("qualificationLevel")
         if self.qualification_level is not None and self.qualification_level not in LEVELS:

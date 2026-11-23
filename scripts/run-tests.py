@@ -374,7 +374,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="Required for execution. Parent for owned test files; SDLC supplies the external task temp directory.")
     parser.add_argument("--artifacts", default="{}", help="JSON mapping deliverable references to selected file-path arrays.")
     parser.add_argument("--diagnostic-output", type=pathlib.Path,
-                        help="Full failure report; files outside .ceratops/results/test-diagnostics are caller-retained.")
+                        help="Full failure report; files outside .test-diagnostics are caller-retained.")
     add_result_arguments(parser)
     args = parser.parse_args(argv)
     if args.describe_test_results:
@@ -394,7 +394,7 @@ def main(argv: list[str] | None = None) -> int:
         args.observed_checks = []
         args.check_summary = None
         args.executed = False
-        args.diagnostic_path = (ROOT / (args.diagnostic_output or pathlib.Path(".ceratops/results/test-diagnostics/pytest-failure.json"))).resolve()
+        args.diagnostic_path = (ROOT / (args.diagnostic_output or pathlib.Path(".test-diagnostics/pytest-failure.json"))).resolve()
         args.current_results = CurrentCheckResults(ROOT) if support is not None and (ROOT / ".git").exists() else None
         if support is not None:
             support.remove_test_diagnostic(args.diagnostic_path, root=ROOT, current=args.current_results)

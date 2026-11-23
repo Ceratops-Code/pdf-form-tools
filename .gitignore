@@ -9,5 +9,4 @@ build/
 !/.ceratops/build/
 dist/
 *.egg-info/
-/.build/
-/.ceratops/results/test-diagnostics/
+/.test-diagnostics/

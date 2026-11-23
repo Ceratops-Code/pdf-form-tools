@@ -118,7 +118,7 @@ class CurrentCheckResults:
         self.path = result_path(self.common / "ceratops/results/repository-checks" / identity / "check_results.json")
         self.worktree = {"id": identity, "path": str(self.root)}
         self.pending = result_path(self.path.with_name(".check_results.in_process.json"))
-        self._stamp: tuple[int, int, int] | None = None
+        self._stamp: tuple[int, int, int, int] | None = None
         self._offset = 0
         self._incomplete_tail = False
         self.value: dict[str, Any] = {}
@@ -134,19 +134,18 @@ class CurrentCheckResults:
             self.value = {"schema": CURRENT_RESULTS_SCHEMA, "worktree": self.worktree,
                           "inputGroups": {}, "entries": {}}
             return
-        stamp = (info.st_mtime_ns, info.st_size, info.st_ino)
+        stamp = (info.st_mtime_ns, info.st_size, info.st_ino, info.st_ctime_ns)
         if stamp == self._stamp:
             return
         if info.st_size > 64 * 1024 * 1024:
             raise ValueError(f"Current check results exceed 64 MiB: {self.path}")
-        if (self._stamp is None or stamp[2] != self._stamp[2]
-                or stamp[1] <= self._stamp[1]):
-            self._offset = 0
-            self.value = {"schema": CURRENT_RESULTS_SCHEMA, "worktree": self.worktree,
-                          "inputGroups": {}, "entries": {}}
+        # A compacted replacement can be larger and reuse a previous inode.
+        # Only this instance's own writes can advance its cached snapshot.
+        self._offset = 0
+        self.value = {"schema": CURRENT_RESULTS_SCHEMA, "worktree": self.worktree,
+                      "inputGroups": {}, "entries": {}}
         self._incomplete_tail = False
         with self.path.open("rb") as stream:
-            stream.seek(self._offset)
             for raw in stream:
                 if not raw.endswith(b"\n"):
                     # Only the command owner may discard a torn trailing append.
@@ -303,7 +302,7 @@ class CurrentCheckResults:
                 self.value["entries"][key] = entry
         self._offset += len(raw)
         info = self.path.stat()
-        self._stamp = (info.st_mtime_ns, info.st_size, info.st_ino)
+        self._stamp = (info.st_mtime_ns, info.st_size, info.st_ino, info.st_ctime_ns)
 
     def rewrite_current_results(self) -> None:
         """At an owning command boundary, retain current outcomes and recover a torn tail.
@@ -340,7 +339,7 @@ class CurrentCheckResults:
         self.value = value
         self._offset = len(raw)
         self._incomplete_tail = False
-        self._stamp = (info.st_mtime_ns, info.st_size, info.st_ino)
+        self._stamp = (info.st_mtime_ns, info.st_size, info.st_ino, info.st_ctime_ns)
 
 
 def _execution_fields(value: Any, *, completed: bool) -> bool:
@@ -463,6 +462,7 @@ def _check_inventory(root: pathlib.Path, patterns: list[str], files: list[str]) 
             pattern.startswith("**/") and fnmatch.fnmatchcase(name, pattern[3:]))
     names = {name for name in files if any(matches(name, rule) for rule in patterns)}
     names.update(rule for rule in patterns if not any(char in rule for char in "*?["))
+    names.discard(".ceratops/check_summary.json")
     return {name: _check_file_digest(root, name) for name in sorted(names)}
 
 
@@ -584,12 +584,15 @@ def _build_git(root: pathlib.Path, *arguments: str, missing: bool = False) -> by
     raise ValueError(details)
 
 
-def _build_blob(root: pathlib.Path, commit: str, path: str, limit: int) -> bytes:
+def _build_blob(root: pathlib.Path, commit: str, path: str, limit: int, *,
+                missing: bool = False) -> bytes:
     """Only literal regular Git files can supply committed reuse facts."""
     if ("\\" in path or path.startswith("/") or ":" in path
             or any(part in {"", ".", ".."} for part in path.split("/"))):
         raise ValueError("Build record path must be repository-relative.")
     entry = _build_git(root, "ls-tree", "-z", commit, "--", f":(literal){path}")
+    if missing and not entry:
+        return b""
     metadata, separator, actual = entry.rstrip(b"\0").partition(b"\t")
     fields = metadata.split()
     if (not separator or actual != path.encode() or len(fields) != 3
@@ -601,12 +604,14 @@ def _build_blob(root: pathlib.Path, commit: str, path: str, limit: int) -> bytes
     return _build_git(root, "cat-file", "blob", oid)
 
 
-def read_build_check_summary(root: pathlib.Path, tag: str, receipt_path: str) -> dict[str, Any]:
-    """Read only the tagged receipt and summary; never open packages or full logs."""
+def read_build_check_summary(
+    root: pathlib.Path, tag: str, receipt_path: str, *, revision: str = "HEAD",
+) -> dict[str, Any]:
+    """Bind the committed receipt to the exact receipt and summary at its tag."""
     _build_git(root, "check-ref-format", "refs/tags/" + tag)
     commit = _build_git(root, "rev-parse", "--verify", "--end-of-options",
                         f"refs/tags/{tag}^{{commit}}").decode().strip()
-    raw = _build_blob(root, commit, receipt_path, 1024 * 1024)
+    raw = _build_blob(root, revision, receipt_path, 1024 * 1024)
     receipt = json.loads(raw)
     identity = receipt["identity"]
     key = identity.get("storageKey", identity.get("releaseBundle"))
@@ -614,18 +619,21 @@ def read_build_check_summary(root: pathlib.Path, tag: str, receipt_path: str) ->
     if not isinstance(key, str) or not re.fullmatch(rf"(?:{slug}|members/{slug}/{slug}|bundles/{slug})", key):
         raise ValueError("Receipt storage key has invalid path segments.")
     expected_tag = key + "/" + identity["version"]
-    directory = ".build" if receipt_path.startswith(".build/") else ".ceratops/build"
-    parent = f'{directory}/{key}/{identity["version"]}'
+    parent = f".ceratops/build/{expected_tag}"
     expected_paths = {parent + "/build_receipt.json",
                       parent + "/" + identity["target"] + "/build_receipt.json"}
     if (receipt.get("schema") != "ceratops-build-result.v4" or receipt.get("status") != "passed"
-            or receipt.get("receiptPath") != receipt_path or receipt_path not in expected_paths
+            or receipt_path not in expected_paths
             or tag != expected_tag or receipt.get("tag", tag) != tag):
         raise ValueError("Build tag, identity and committed receipt path disagree.")
+    recorded_path = receipt["receiptPath"]
+    if ((revision, receipt_path) != (commit, recorded_path)
+            and _build_blob(root, commit, recorded_path, 1024 * 1024) != raw):
+        raise ValueError("Checkout receipt differs from the exact tagged receipt.")
     summary = {"schema": "ceratops-check-summary.v1", "inputGroups": {}, "checkGroups": {}, "checks": []}
     reference = receipt.get("checkSummary")
     if reference is not None:
-        expected = str(pathlib.PurePosixPath(receipt_path).with_name("check_summary.json"))
+        expected = str(pathlib.PurePosixPath(recorded_path).with_name("check_summary.json"))
         if (receipt.get("tag") != tag or reference.get("root") != "git"
                 or reference.get("path") != expected
                 or expected not in receipt["committedResultPaths"]):
@@ -634,7 +642,7 @@ def read_build_check_summary(root: pathlib.Path, tag: str, receipt_path: str) ->
         if len(content) != reference["size"] or hashlib.sha256(content).hexdigest() != reference["sha256"]:
             raise ValueError("Committed check summary differs from its receipt.")
         summary = parse_check_summary(content)
-    return {"tag": tag, "commit": commit, "receiptPath": receipt_path,
+    return {"tag": tag, "commit": commit, "receiptPath": recorded_path,
             "receipt": receipt, "summary": summary}
 
 
@@ -642,61 +650,43 @@ def select_build_check_summaries(
     root: pathlib.Path, *, qualification_level: str = "alpha",
     unit: str | None = None, target: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Choose the newest eligible version in this checkout's .ceratops/build records.
-
-    Git tags prove completion; the checkout supplies only selection identities.
-    No ancestry walk, other checkout, deployment history or artifact-store scan.
-    A newer completed historical build with no summary supplies no coverage,
-    instead of silently borrowing an older build.
-    """
+    """Read the newest eligible build per target from tags in HEAD's history."""
     from packaging.version import InvalidVersion, Version
 
     levels = ("alpha", "beta", "rc", "final")
-    if qualification_level not in levels:
-        raise ValueError("Unsupported build qualification level.")
-    history = root / ".ceratops/build"
-    if not history.is_dir():
+    minimum = levels.index(qualification_level)
+    head = _build_git(root, "rev-parse", "--verify", "--quiet", "HEAD^{commit}", missing=True).decode().strip()
+    if not head:
         return []
-    candidates: list[tuple[Any, str, str, pathlib.Path, str, str]] = []
-    for pattern in ("*/*/build_receipt.json", "*/*/*/build_receipt.json",
-                    "members/*/*/*/build_receipt.json", "members/*/*/*/*/build_receipt.json",
-                    "bundles/*/*/build_receipt.json", "bundles/*/*/*/build_receipt.json"):
-        for path in history.glob(pattern):
-            if any(parent.is_symlink() or parent.is_junction() for parent in (path, *path.parents)):
-                raise ValueError("Build history cannot traverse directory links.")
-            if path.stat().st_size > 1024 * 1024:
-                raise ValueError("Local build receipt exceeds its size limit.")
-            try:
-                receipt = json.loads(path.read_bytes())
-                if receipt.get("schema") != "ceratops-build-result.v4":
-                    continue
-                identity = receipt["identity"]
-                name = identity.get("storageKey", identity.get("releaseBundle"))
-                destination, version = identity["target"], identity["version"]
-                level = build_qualification(version)
-                if (unit is not None and name != unit) or (target is not None and destination != target):
-                    continue
-                if levels.index(level) < levels.index(qualification_level):
-                    continue
-                tag = name + "/" + version
-                if receipt.get("status") != "passed" or receipt.get("tag", tag) != tag:
-                    continue
-                candidates.append((Version(version), name, destination, path, tag, receipt["receiptPath"]))
-            except (ValueError, KeyError, TypeError, InvalidVersion):
-                continue  # Interrupted local preparation is not a completed build.
+    candidates: list[tuple[Version, str, str]] = []
+    for tag in _build_git(root, "tag", "--merged", head).decode().splitlines():
+        name, separator, version = tag.rpartition("/")
+        if not separator or unit is not None and name != unit:
+            continue
+        try:
+            parsed_version = Version(version)
+        except InvalidVersion:
+            continue
+        if levels.index(build_qualification(version)) >= minimum:
+            candidates.append((parsed_version, name, tag))
+
     chosen: dict[tuple[str, str], dict[str, Any]] = {}
-    for _version, name, destination, _path, tag, recorded_path in sorted(candidates, key=lambda row: (row[0], str(row[3])), reverse=True):
-        if (name, destination) in chosen:
-            continue
-        # An absent tag is an unfinished preparation, not an accepted baseline.
-        if not _build_git(root, "rev-parse", "--verify", "--quiet", "--end-of-options",
-                          "refs/tags/" + tag, missing=True):
-            continue
-        selected = read_build_check_summary(root, tag, recorded_path)
-        identity = selected["receipt"]["identity"]
-        if (identity.get("storageKey", identity.get("releaseBundle")), identity["target"]) != (name, destination):
-            raise ValueError("Local build selector differs from the tagged identity.")
-        chosen[(name, destination)] = selected
+    for _version, name, tag in sorted(candidates, reverse=True):
+        prefix = ".ceratops/build/" + tag + "/"
+        paths = _build_git(
+            root, "ls-tree", "-r", "-z", "--name-only", head,
+            "--", f":(literal){prefix.rstrip('/')}",
+        ).decode().split("\0")
+        for path in paths:
+            parts = path.removeprefix(prefix).split("/")
+            if not path.startswith(prefix) or parts[-1] != "build_receipt.json" or len(parts) > 2:
+                continue
+            if len(parts) == 2 and ((name, parts[0]) in chosen or target is not None and parts[0] != target):
+                continue
+            selected = read_build_check_summary(root, tag, path, revision=head)
+            destination = selected["receipt"]["identity"]["target"]
+            if target is None or destination == target:
+                chosen.setdefault((name, destination), selected)
     return [chosen[key] for key in sorted(chosen)]
 
 

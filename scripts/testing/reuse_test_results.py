@@ -164,7 +164,7 @@ def remove_test_diagnostic(path: pathlib.Path, *, root: pathlib.Path, current: A
                            retired_scope: Mapping[str, Any] | None = None) -> None:
     """Remove a managed report after its own failures have newer saved passes.
 
-    Caller-selected reports outside .build/test-diagnostics are user-retained.
+    Caller-selected reports outside .ceratops/results/test-diagnostics are user-retained.
     Startup uses only current local results; an old tagged pass never clears a
     later failure. A complete successful command can clear an earlier launch or
     collection error for that same request, which has no individual test result.
@@ -176,7 +176,7 @@ def remove_test_diagnostic(path: pathlib.Path, *, root: pathlib.Path, current: A
         # Neither report exists below a non-directory ancestor. If a later
         # failure needs a report, its writer can explain why saving it failed.
         return
-    if not path.resolve().is_relative_to((root / ".build/test-diagnostics").resolve()):
+    if not path.resolve().is_relative_to((root / ".ceratops/results/test-diagnostics").resolve()):
         return
     report = _read_test_diagnostic(path, root)
     if report is None:
@@ -481,7 +481,7 @@ class ResultStore:
         self.checkout = _digest(str(self.root))
         # Diagnostic location is observational, never a test acceptance input.
         self.diagnostic_path = pathlib.Path(context.get("diagnosticPath") or
-                                            self.root / ".build/test-diagnostics/pytest-failure.json")
+                                            self.root / ".ceratops/results/test-diagnostics/pytest-failure.json")
         self.unsaved_reasons: dict[str, str] = {}
         self.qualification_level = context.get("qualificationLevel")
         if self.qualification_level is not None and self.qualification_level not in LEVELS:
@@ -489,15 +489,19 @@ class ResultStore:
         self.manifest = load_manifest(self.root / "tests/test-impact.json")
         environment_reader = runpy.run_path(str(pathlib.Path(__file__).with_name("read_check_environment.py")))
         self.environment_inputs_for_reuse = environment_reader["environment_inputs_for_reuse"]
-        declared_tools = sorted({name for suite in self.manifest.suites.values()
-                                 for name in (suite.tools if suite.tools is not None else ("uv",))})
-        observed_environment = environment_reader["read_environment"](root, {"tools": declared_tools}, runtime=False)
+        declared_tools = {name for suite in self.manifest.suites.values()
+                          for name in (suite.tools if suite.tools is not None else ("uv",))}
+        # A test may require a tool absent from every suite-level declaration.
+        declared_tools.update(name for inputs in self.manifest.reuse_inputs.values()
+                              for name in (inputs.get("tools") or ()))
+        observed_environment = environment_reader["read_environment"](root, {"tools": sorted(declared_tools)}, runtime=False)
         ignored = [pattern for item in self.manifest.ignored_paths for pattern in item.paths]
         names = _git(root, "ls-files", "--cached", "--others", "--exclude-standard", "-z").decode("utf-8").split("\0")
         self.files: dict[str, str | None] = {}
         self.stats: dict[str, tuple[int, int] | None] = {}
+        repository_summary_path = ".ceratops/check_summary.json"
         for name in sorted(set(filter(None, names))):
-            if any(path_matches(pattern, name) for pattern in ignored):
+            if name == repository_summary_path or any(path_matches(pattern, name) for pattern in ignored):
                 continue
             path = self.root / name
             if not path.resolve().is_relative_to(self.root):
@@ -544,18 +548,66 @@ class ResultStore:
                         "setup": "passed", "call": "passed", "teardown": "passed",
                     })):
                 raise ValueError("Current pytest result conflicts with its recorded execution facts.")
-        self.tagged_by_check: dict[str, list[dict[str, Any]]] = {}
+        self.committed_by_check: dict[str, list[dict[str, Any]]] = {}
         self.reuse_reasons: dict[str, dict[str, Any]] = {}
         self.comparison_groups: dict[tuple[str, tuple[str, ...]], tuple[Suite, tuple[str, ...]]] = {}
-        if self.qualification_level is not None:
+        in_ci = os.environ.get("GITHUB_ACTIONS") == "true"
+        if self.qualification_level is not None and not in_ci:
             # This repository-owned reader is also the generated runner's
             # public result contract. No installed skill or artifact store is
             # imported or searched to discover the previous built version.
             for build in reader["select_build_check_summaries"](
                 self.root, qualification_level=self.qualification_level,
             ):
-                self._load_summary(build["summary"], self.tagged_by_check,
+                self._load_summary(build["summary"], self.committed_by_check,
                                    {"build": {key: build[key] for key in ("tag", "commit", "receiptPath")}})
+        if self.qualification_level is not None:
+            head = reader["_build_git"](
+                self.root, "rev-parse", "--verify", "--quiet", "HEAD^{commit}", missing=True,
+            ).decode("ascii").strip()
+            summary_limit = 16 * 1024 * 1024
+            summaries: dict[str, str | None] = {}
+            if head and not in_ci:
+                # Use the latest promoted summary from this source's history.
+                revisions = reader["_build_git"](
+                    self.root, "log", "--full-history", "--no-merges", "--format=%H", head,
+                    "--", repository_summary_path,
+                ).decode().splitlines()
+                summaries.update(dict.fromkeys(revisions))
+            elif head and self.qualification_level == "final" and (repository := os.getenv("GITHUB_REPOSITORY")):
+                # Git supplies ancestry. GitHub supplies the published, immutable results.
+                tags = set(reader["_build_git"](self.root, "tag", "--merged", head, "--list").decode().splitlines())
+                if tags:
+                    endpoint = f"repos/{repository}/releases"
+                    releases = subprocess.check_output(
+                        ["gh", "api", "--paginate", f"{endpoint}?per_page=100", "--jq",
+                         '.[] | select(.immutable and (.draft | not) and (.prerelease | not)) | '
+                         '. as $release | .assets[] | '
+                         f'select(.name == "check_summary.json" and .state == "uploaded" and .size <= {summary_limit}) | '
+                         '[$release.published_at, $release.tag_name, .id] | @tsv'],
+                        cwd=self.root, text=True, encoding="utf-8", timeout=60,
+                    )
+                    for _, tag, asset_id in sorted((row.split("\t") for row in releases.splitlines()), reverse=True):
+                        if tag in tags:
+                            summaries[tag] = f"{endpoint}/assets/{asset_id}"
+            for revision, asset in summaries.items():
+                if asset is None:
+                    raw = reader["_build_blob"](self.root, revision, repository_summary_path, summary_limit, missing=True)
+                    origin = {"repository_summary_commit": revision}
+                else:
+                    raw = subprocess.check_output(
+                        ["gh", "api", "-H", "Accept: application/octet-stream", asset],
+                        cwd=self.root, timeout=60,
+                    )
+                    origin = {"release_summary_tag": revision}
+                if not raw:
+                    continue
+                summary = reader["parse_check_summary"](raw)
+                system = self.target["platform"]
+                if any(str(group.get("runtime", {}).get("platform", "")).partition("-")[0] == system
+                       for group in summary["inputGroups"].values()):
+                    self._load_summary(summary, self.committed_by_check, origin)
+                    break
         self.inputs_by_group: dict[str, dict[str, Any]] = {}
 
     @staticmethod
@@ -675,7 +727,7 @@ class ResultStore:
     def matching(self, nodeid: str, inputs: Mapping[str, Any]) -> dict[str, Any] | None:
         self._load_check(nodeid)
         records = [*self.records_by_check.get((inputs["checkout"], nodeid), []),
-                   *self.tagged_by_check.get(nodeid, [])]
+                   *self.committed_by_check.get(nodeid, [])]
         candidates = sorted((record for record in records if self._same_inputs(record, inputs)),
                             key=lambda record: (record["completed_ns"], record["result_id"]), reverse=True)
         self.reuse_reasons[nodeid] = {"decision": "execute", "reason": "No recorded result for this check."}
@@ -688,9 +740,15 @@ class ResultStore:
                 return None
             changed_paths: list[str] = []
             if self._current(inputs, changed_paths=changed_paths):
+                reason = "Current worktree result."
+                if "build" in record:
+                    reason = "Git build summary."
+                elif "repository_summary_commit" in record:
+                    reason = "Committed repository check summary."
+                elif "release_summary_tag" in record:
+                    reason = f"Published release check summary ({record['release_summary_tag']})."
                 self.reuse_reasons[nodeid] = {
-                    "decision": "reuse", "reason": ("Git build summary." if "build" in record else
-                                                      "Current worktree result."),
+                    "decision": "reuse", "reason": reason,
                     "result_id": record["result_id"], **({"build": record["build"]} if "build" in record else {}),
                 }
                 return {**record, "applicable_product_inputs": dict(inputs["product_inputs"])}
@@ -736,9 +794,8 @@ class ResultStore:
         # required by this check. Keep the original group in the saved result
         # and compare the current scope against its recorded facts below.
         excluded = {"producer", "product_inputs", "group"}
-        if "build" in record or "imported" in record:
-            # Tagged facts are discovered through this checkout's .build history;
-            # their original physical checkout is not a product dependency.
+        if any(origin in record for origin in ("build", "imported", "repository_summary_commit", "release_summary_tag")):
+            # Published facts retain their original worktree as evidence.
             excluded.add("checkout")
         original = record.get("comparison_inputs", record["inputs"])
         previous = original.get("product_inputs")

@@ -6,6 +6,8 @@ __pycache__/
 .mypy_cache/
 
 build/
+!/.ceratops/build/
 dist/
 *.egg-info/
 /.build/
+/.ceratops/results/test-diagnostics/

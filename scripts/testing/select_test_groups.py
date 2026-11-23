@@ -461,7 +461,7 @@ def group_inputs(manifest: Manifest, nodeid: str, paths: Iterable[str]) -> tuple
             tools=suite.tools if reuse["tools"] is None else reuse["tools"],
             environment=suite.environment if reuse["environment"] is None else reuse["environment"],
         ), tuple(path for path in sorted(set(paths))
-                 if not path.startswith((".ceratops/build/", ".ceratops/results/"))
+                 if path != ".ceratops/check_summary.json" and not path.startswith((".ceratops/build/", ".ceratops/results/"))
                  and any(path_matches(pattern, path) for pattern in reuse["paths"]))
     patterns = [*(
         pattern for rule in manifest.rules if dependencies.intersection(rule.suites)
@@ -471,7 +471,7 @@ def group_inputs(manifest: Manifest, nodeid: str, paths: Iterable[str]) -> tuple
                for target in manifest.suites[group].pytest]
     selected = []
     for path in sorted(set(paths)):
-        if path.startswith((".ceratops/build/", ".ceratops/results/")):
+        if path == ".ceratops/check_summary.json" or path.startswith((".ceratops/build/", ".ceratops/results/")):
             continue
         # The manifest describes ownership, not product bytes. Only the rules
         # affecting this group are recorded below; unrelated rule edits do not
@@ -536,7 +536,7 @@ def selection_from_changes(
     full_suite = False
     for changed in sorted(changes, key=lambda item: (item.paths, item.status)):
         for path_index, path in enumerate(changed.paths):
-            if path.startswith((".ceratops/build/", ".ceratops/results/")):
+            if path == ".ceratops/check_summary.json" or path.startswith((".ceratops/build/", ".ceratops/results/")):
                 ignored_paths.append({"path": path, "id": "ceratops-results", "reason": "generated Ceratops result"})
                 continue
             renamed_source = (

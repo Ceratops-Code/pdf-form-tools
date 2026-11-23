@@ -204,7 +204,7 @@ deliverables:
               - python
               - uv
           steps:
-            - run: [uv, build, --out-dir, dist]
+            - run: [uv, run, --project, scripts, --locked, python, -m, build, --installer, uv, --outdir, dist, --report, '{build_receipt}']
         publish:
           requires:
             tools:

@@ -138,7 +138,7 @@ def _remove_test_scratch(directory: pathlib.Path) -> None:
     entry = _scratch_entry(directory)
     if entry is None:
         return
-    if os.name != "nt" and (entry.st_uid != os.getuid() or entry.st_mode & 0o077):
+    if sys.platform != "win32" and (entry.st_uid != os.getuid() or entry.st_mode & 0o077):
         raise OSError(f"Test scratch must be private to the current user: {directory}")
     try:
         shutil.rmtree(directory, onexc=_remove_readonly_scratch)

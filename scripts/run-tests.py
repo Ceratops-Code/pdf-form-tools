@@ -12,20 +12,19 @@ Pytest scratch is disposable.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib
 import importlib.metadata
 import json
 import os
 import pathlib
-import re
-import secrets
 import shlex
 import shutil
 import stat
 import subprocess
 import sys
-import time
-from collections.abc import Callable, Iterator
+import tempfile
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from typing import Any
 
@@ -65,83 +64,14 @@ from write_check_results import (  # noqa: E402
     run_recorded_check,
 )
 
-# A lease is registered before its directory exists. The namespace lock makes
-# registration and retirement atomic to other runners. A child inherits the
-# lease handle, so losing its launcher cannot make live scratch collectible.
-_SCRATCH_SIGNATURE = b"ceratops-test-scratch-v1\n"
-_SCRATCH_NAME = re.compile(r"[0-9a-f]{8}\.lease\Z")
-
-
-def _scratch_entry(path: pathlib.Path, *, directory: bool) -> os.stat_result | None:
+def _scratch_entry(path: pathlib.Path) -> os.stat_result | None:
     try:
         entry = path.lstat()
     except FileNotFoundError:
         return None
-    expected = stat.S_ISDIR if directory else stat.S_ISREG
-    if (not expected(entry.st_mode)
-            or getattr(entry, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
-            or (not directory and entry.st_nlink != 1)):
-        raise OSError(f"Unsafe test scratch path: {path}")
+    if not stat.S_ISDIR(entry.st_mode) or getattr(entry, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+        raise OSError(f"Unsafe test scratch directory: {path}")
     return entry
-
-
-def _acquire_scratch_lease(path: pathlib.Path, *, create: bool = False) -> int | None:
-    """Return a kernel-owned lease, or None only for a competing open."""
-    _scratch_entry(path, directory=False)
-    if sys.platform == "win32":
-        import ctypes
-        import msvcrt
-        from ctypes import wintypes
-
-        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-        open_file = kernel.CreateFileW
-        open_file.argtypes = [
-            wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
-            wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
-        ]
-        open_file.restype = wintypes.HANDLE
-        close_handle = kernel.CloseHandle
-        close_handle.argtypes = [wintypes.HANDLE]
-        close_handle.restype = wintypes.BOOL
-        # Read/write access, no sharing, OPEN_ALWAYS or OPEN_EXISTING.
-        # OPEN_REPARSE_POINT keeps an unexpected link from redirecting the open.
-        handle = open_file(str(path), 0xC0000000, 0, None, 4 if create else 3, 0x00200000, None)
-        if handle == ctypes.c_void_p(-1).value:
-            error = ctypes.get_last_error()
-            if error == 32:  # ERROR_SHARING_VIOLATION
-                return None
-            raise OSError(f"Cannot open test scratch lease {path}: {ctypes.WinError(error)}")
-        try:
-            return msvcrt.open_osfhandle(handle, os.O_RDWR | os.O_BINARY | os.O_NOINHERIT)
-        except BaseException:
-            close_handle(handle)
-            raise
-
-    import fcntl
-
-    descriptor = os.open(path, os.O_RDWR | os.O_NOFOLLOW | (os.O_CREAT if create else 0), 0o600)
-    try:
-        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        os.close(descriptor)
-        return None
-    except BaseException:
-        os.close(descriptor)
-        raise
-    return descriptor
-
-
-@contextmanager
-def _scratch_registry(scope: pathlib.Path) -> Iterator[None]:
-    deadline = time.monotonic() + 30
-    while (descriptor := _acquire_scratch_lease(scope / ".registry", create=True)) is None:
-        if time.monotonic() >= deadline:
-            raise TimeoutError(f"Timed out acquiring test scratch registry {scope}")
-        time.sleep(0.05)
-    try:
-        yield
-    finally:
-        os.close(descriptor)
 
 
 if sys.platform == "win32":
@@ -201,99 +131,69 @@ def _remove_readonly_scratch(
     raise error
 
 
-def _reclaim_test_scratch(record: pathlib.Path) -> None:
-    """Reclaim exactly the directory paired with an idle runner-owned lease."""
-    descriptor = _acquire_scratch_lease(record)
-    if descriptor is None:
+def _remove_test_scratch(directory: pathlib.Path) -> None:
+    """Remove this runner's private directory without following a redirected path."""
+    if any(path.is_symlink() or path.is_junction() for path in directory.parents):
+        raise OSError(f"Test scratch has a linked parent: {directory}")
+    entry = _scratch_entry(directory)
+    if entry is None:
         return
-    directory = record.with_suffix("")
+    if os.name != "nt" and (entry.st_uid != os.getuid() or entry.st_mode & 0o077):
+        raise OSError(f"Test scratch must be private to the current user: {directory}")
     try:
-        signature = os.read(descriptor, len(_SCRATCH_SIGNATURE) + 1)
-        if signature != _SCRATCH_SIGNATURE:
-            # An interruption can leave a partial record before mkdir.
-            if not _SCRATCH_SIGNATURE.startswith(signature) or os.path.lexists(directory):
-                return
-        elif _scratch_entry(directory, directory=True) is not None:
-            shutil.rmtree(directory, onexc=_remove_readonly_scratch)
+        shutil.rmtree(directory, onexc=_remove_readonly_scratch)
     except OSError as exc:
-        raise OSError(f"Cannot reclaim test scratch {directory}: {exc}") from exc
-    finally:
-        os.close(descriptor)
-    record.unlink()
-
-
-class _TestScratch:
-    def __init__(self, path: pathlib.Path, descriptor: int) -> None:
-        self.path = path
-        self.descriptor = descriptor
-
-    @contextmanager
-    def child_options(self) -> Iterator[dict[str, Any]]:
-        if sys.platform != "win32":
-            yield {"pass_fds": (self.descriptor,)}
-            return
-
-        import msvcrt
-
-        handle = msvcrt.get_osfhandle(self.descriptor)
-        startup = subprocess.STARTUPINFO(lpAttributeList={"handle_list": [handle]})
-        os.set_handle_inheritable(handle, True)
-        try:
-            yield {"startupinfo": startup}
-        finally:
-            os.set_handle_inheritable(handle, False)
+        raise OSError(f"Cannot remove test scratch {directory}: {exc}") from exc
 
 
 @contextmanager
-def _owned_test_scratch(parent: pathlib.Path, name: str) -> Iterator[_TestScratch]:
-    """Own a private namespace and converge after normal exit or interruption.
-
-    One permanent registry lock per selected temp parent protects the paired
-    lease records and disposable run directories. A subsequent run retires
-    idle records, including incomplete allocations, before creating its own.
-    """
-    owner: int | None = None
-    if sys.platform != "win32":
-        owner = os.getuid()
-        name = f"{name}-{owner}"
-    scope = parent / name
-    scope.mkdir(mode=0o700, exist_ok=True)
-    entry = _scratch_entry(scope, directory=True)
-    if entry is None or (owner is not None and (entry.st_uid != owner or entry.st_mode & 0o077)):
-        raise OSError(f"Test scratch namespace must be private: {scope}")
-    with _scratch_registry(scope):
-        failures = []
-        for record in scope.iterdir():
-            if _SCRATCH_NAME.fullmatch(record.name):
-                try:
-                    _reclaim_test_scratch(record)
-                except OSError as exc:
-                    failures.append(str(exc))
-        if failures:
-            raise OSError("\n".join(failures))
-        while True:
-            directory = scope / secrets.token_hex(4)
-            record = directory.with_suffix(".lease")
-            if not os.path.lexists(directory) and not os.path.lexists(record):
-                break
-        descriptor = _acquire_scratch_lease(record, create=True)
-        if descriptor is None:
-            raise OSError(f"Cannot register test scratch {directory}")
-        try:
-            if os.write(descriptor, _SCRATCH_SIGNATURE) != len(_SCRATCH_SIGNATURE):
-                raise OSError(f"Cannot write test scratch lease {record}")
-            directory.mkdir(mode=0o700)
-        except BaseException:
-            os.close(descriptor)
-            raise
+def _owned_test_scratch(
+    checkout: pathlib.Path, parent: pathlib.Path | None, environ: Mapping[str, str],
+) -> Iterator[pathlib.Path]:
+    """One top-level test tree owns this checkout's scratch until its workers exit."""
+    checkout = checkout.resolve()
+    linked = checkout.parent.parent.name.casefold() == "worktrees"
+    project = checkout.parent.name if linked else checkout.name
+    projects = checkout.parents[2] if linked else checkout.parent
+    configured_temp = pathlib.Path(environ.get("CERATOPS_TASK_TEMP_ROOT") or projects / "tmp")
+    parent = pathlib.Path(os.path.abspath(checkout / (parent or environ.get("PYTEST_DEBUG_TEMPROOT") or configured_temp)))
+    project_temp = configured_temp / project
+    # SDLC can pass an already-qualified task directory. Always take the
+    # checkout identity from the working tree, including on the release branch.
+    if parent == project_temp or parent.parent == project_temp:
+        base = configured_temp
+    else:
+        base = parent
+    key = checkout.name
+    configured_projects = environ.get("CERATOPS_PROJECTS_ROOT")
+    if ((configured_projects and projects != pathlib.Path(configured_projects).resolve())
+            or (not configured_projects and (base != configured_temp or configured_temp.parent != projects))
+            or (linked and key.casefold() == project.casefold())):
+        # A caller can share a temp base across unrelated same-named clones.
+        key = hashlib.sha256(os.fsencode(os.path.normcase(str(checkout)))).hexdigest()[:16]
+    scope = base / project / key / ".pytest-scratch"
+    inherited = environ.get("CERATOPS_PYTEST_SCRATCH_ROOT")
+    active = pathlib.Path(inherited) if inherited else None
+    owner = next((p for p in (active, *active.parents) if p.name == ".pytest-scratch"), None) if active else None
+    nested = active is not None and owner is not None and (
+        parent == active or scope == owner or parent == owner.parent.parent.parent
+    )
+    target = active if nested and active is not None else scope
+    for path in (parent, *parent.parents, target, *target.parents):
+        if path.is_symlink() or path.is_junction():
+            raise OSError(f"Test scratch cannot pass through a linked directory: {path}")
+    if nested:
+        directory = pathlib.Path(tempfile.mkdtemp(prefix="_nested-", dir=target))
+    else:
+        directory = scope
+        _remove_test_scratch(directory)
+        directory.mkdir(parents=True, mode=0o700)
     try:
-        yield _TestScratch(directory, descriptor)
+        yield directory
     finally:
-        # Close rather than unlock: an inherited descriptor can still be live.
-        os.close(descriptor)
-        with _scratch_registry(scope):
-            if os.path.lexists(record):
-                _reclaim_test_scratch(record)
+        # Test commands join their workers before returning. After a hard stop,
+        # the next top-level invocation runs only once that worker tree has exited.
+        _remove_test_scratch(directory)
 
 
 def execute_check(args: argparse.Namespace, targets: list[str], inherited: list[str]) -> int:
@@ -303,65 +203,61 @@ def execute_check(args: argparse.Namespace, targets: list[str], inherited: list[
             path = (ROOT / target.split("::", 1)[0]).resolve()
             if not path.is_relative_to(ROOT) or not path.exists():
                 raise ValueError(f"test target must exist inside this repository: {target}")
-    parent = args.temporary_root
-    parent.mkdir(parents=True, exist_ok=True)
-    with _owned_test_scratch(parent, ".repo-tests") as scratch:
-        temporary = scratch.path
-        environment = os.environ.copy()
-        environment.pop(CHECK_CONTEXT_ENV, None)
-        environment.update(dict.fromkeys(("TEMP", "TMP", "TMPDIR"), str(temporary)))
-        environment["PYTHONPYCACHEPREFIX"] = str(temporary / "python-cache")
-        environment["PYTEST_ADDOPTS"] = shlex.join(inherited)
-        test_command = [
-            sys.executable, "-m", "pytest", *targets, *without_basetemp(args.pytest_arg),
-        ]
-        command = args.probe_command or [
-            *test_command,
-            "--basetemp", str(temporary / "pytest"),
-            "-o", "cache_dir=" + str(temporary / "pytest-cache"),
-        ]
-        if args.probe_command is None:
-            reuse_test_results = test_support()
-            environment.update(reuse_test_results.result_environment(
-                test_command, ROOT, os.environ, result_writer=ROOT / "scripts/write_check_results.py",
-            ))
-            environment["CERATOPS_TEST_ARTIFACTS"] = json.dumps(args.artifacts)
-            environment["PYTHONPATH"] = os.pathsep.join(filter(None, (
-                str(ROOT / "scripts/testing"), environment.get("PYTHONPATH"),
-            )))
-            environment[reuse_test_results.RESULT_SUMMARY_ENV] = str(temporary / "pytest-results.json")
-            command[3:3] = ["-p", "reuse_test_results"]
-        args.executed = True
-        launch_error = None
-        try:
-            with scratch.child_options() as process_options:
-                result = subprocess.run(command, cwd=ROOT, env=environment, check=False,
-                                        capture_output=True, text=True, encoding="utf-8", errors="replace",
-                                        **process_options)
-        except OSError as exc:
-            launch_error = str(exc)
-            result = subprocess.CompletedProcess(command, 2, "", str(exc))
-        if args.probe_command is None:
-            result.stdout = reuse_test_results.redact_test_diagnostic(result.stdout)
-            result.stderr = reuse_test_results.redact_test_diagnostic(result.stderr)
-        print(result.stdout, end="")
-        print(result.stderr, end="", file=sys.stderr)
-        summary_path = temporary / "pytest-results.json"
-        if summary_path.is_file():
-            observed = json.loads(summary_path.read_text(encoding="utf-8"))
-            args.check_summary = observed["check_summary"]
-            args.observed_checks = [*observed["result_references"], *observed["nonreusable_checks"],
-                                    *observed["skipped_checks"], *observed["passed_checks"]]
-        elif args.probe_command is None:
-            args.observed_checks = [{"id": "pytest", "status": "scope-unrepresented", "reusable": False,
-                                     "reason": "Individual reuse needs declared tests/test-impact.json inputs and completed pytest outcomes."}]
-        if result.returncode and args.probe_command is None:
-            reuse_test_results.save_test_diagnostic(args.diagnostic_path, {
-                "schema": "ceratops-ai-agents-kit-pytest-diagnostic.v1", "cwd": str(ROOT),
-                "command": command, "runtime": sys.executable, "request": args.invocation,
-                "result_request": args.invocation, "exit_code": None if launch_error else result.returncode,
-                "stdout": result.stdout, "stderr": result.stderr,
-            }, root=ROOT, current=args.current_results, summary=args.check_summary)
+    temporary = args.scratch_directory
+    environment = os.environ.copy()
+    environment.pop(CHECK_CONTEXT_ENV, None)
+    environment["CERATOPS_PYTEST_SCRATCH_ROOT"] = str(temporary)
+    environment.update(dict.fromkeys(("TEMP", "TMP", "TMPDIR", "PYTEST_DEBUG_TEMPROOT"), str(temporary)))
+    environment["PYTHONPYCACHEPREFIX"] = str(temporary / "python-cache")
+    environment["PYTEST_ADDOPTS"] = shlex.join(inherited)
+    test_command = [
+        sys.executable, "-m", "pytest", *targets, *without_basetemp(args.pytest_arg),
+    ]
+    command = args.probe_command or [
+        *test_command,
+        "--basetemp", str(temporary / "pytest"),
+        "-o", "cache_dir=" + str(temporary / "pytest-cache"),
+    ]
+    if args.probe_command is None:
+        reuse_test_results = test_support()
+        environment.update(reuse_test_results.result_environment(
+            test_command, ROOT, os.environ, result_writer=ROOT / "scripts/write_check_results.py",
+        ))
+        environment["CERATOPS_TEST_ARTIFACTS"] = json.dumps(args.artifacts)
+        environment["PYTHONPATH"] = os.pathsep.join(filter(None, (
+            str(ROOT / "scripts/testing"), environment.get("PYTHONPATH"),
+        )))
+        environment[reuse_test_results.RESULT_SUMMARY_ENV] = str(temporary / "pytest-results.json")
+        command[3:3] = ["-p", "reuse_test_results"]
+    args.executed = True
+    launch_error = None
+    try:
+        result = subprocess.run(command, cwd=ROOT, env=environment, check=False,
+                                capture_output=True, text=True, encoding="utf-8", errors="replace")
+    except OSError as exc:
+        launch_error = str(exc)
+        result = subprocess.CompletedProcess(command, 2, "", str(exc))
+    if args.probe_command is None:
+        result.stdout = reuse_test_results.redact_test_diagnostic(result.stdout)
+        result.stderr = reuse_test_results.redact_test_diagnostic(result.stderr)
+    print(result.stdout, end="")
+    print(result.stderr, end="", file=sys.stderr)
+    summary_path = temporary / "pytest-results.json"
+    if summary_path.is_file():
+        observed = json.loads(summary_path.read_text(encoding="utf-8"))
+        args.check_summary = observed["check_summary"]
+        args.observed_checks = [*observed["result_references"], *observed["nonreusable_checks"],
+                                *observed["skipped_checks"], *observed["passed_checks"]]
+    elif args.probe_command is None:
+        args.observed_checks = [{"id": "pytest", "status": "scope-unrepresented", "reusable": False,
+                                 "reason": "Individual reuse needs declared tests/test-impact.json inputs and completed pytest outcomes."}]
+    if result.returncode and args.probe_command is None:
+        reuse_test_results.save_test_diagnostic(args.diagnostic_path, {
+            "schema": "ceratops-ai-agents-kit-pytest-diagnostic.v1", "cwd": str(ROOT),
+            "command": command, "runtime": sys.executable, "request": args.invocation,
+            "result_request": args.invocation, "exit_code": None if launch_error else result.returncode,
+            "stdout": result.stdout, "stderr": result.stderr,
+        }, root=ROOT, current=args.current_results, summary=args.check_summary)
     return result.returncode if result.returncode >= 0 else 1
 
 
@@ -371,7 +267,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pytest-arg", action="append", default=[], help="Repeat using --pytest-arg=VALUE.")
     parser.add_argument("--check-group", help="One suite ID from tests/test-impact.json.")
     parser.add_argument("--temporary-root", type=pathlib.Path,
-                        help="Required for execution. Parent for owned test files; SDLC supplies the external task temp directory.")
+                        help="Temp base for checkout-scoped pytest scratch; SDLC may supply the checkout directory.")
     parser.add_argument("--artifacts", default="{}", help="JSON mapping deliverable references to selected file-path arrays.")
     parser.add_argument("--diagnostic-output", type=pathlib.Path,
                         help="Full failure report; files outside .test-diagnostics are caller-retained.")
@@ -433,9 +329,10 @@ def main(argv: list[str] | None = None) -> int:
             return execute_check(args, targets, inherited)
 
         try:
-            code = run_recorded_check(execute_request, args, invocation, repo_root=ROOT,
-                                     checks=(lambda: args.observed_checks) if args.probe_command is None else None,
-                                     summary=(lambda: args.check_summary) if args.probe_command is None else None)
+            with _owned_test_scratch(ROOT, args.temporary_root, os.environ) as args.scratch_directory:
+                code = run_recorded_check(execute_request, args, invocation, repo_root=ROOT,
+                                         checks=(lambda: args.observed_checks) if args.probe_command is None else None,
+                                         summary=(lambda: args.check_summary) if args.probe_command is None else None)
             if support is not None:
                 support.remove_test_diagnostic(args.diagnostic_path, root=ROOT, current=args.current_results,
                                                successful_request=invocation if code == 0 and (args.executed or not request_executed) else None)

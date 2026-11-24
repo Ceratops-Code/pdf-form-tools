@@ -26,7 +26,6 @@ import sys
 import tempfile
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
-from typing import Any
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 DEFAULT_TARGETS: list[str] = ['tests/test_pdf_form_overlay.py', 'tests/test_validate_repository.py']
@@ -63,6 +62,7 @@ from write_check_results import (  # noqa: E402
     describe_result_contract,
     run_recorded_check,
 )
+
 
 def _scratch_entry(path: pathlib.Path) -> os.stat_result | None:
     try:

@@ -1,5 +1,0 @@
-{
-  "extends": [
-    "github>Ceratops-Code/renovate-config:org-inherited-config"
-  ]
-}

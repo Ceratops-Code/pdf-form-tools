@@ -2,9 +2,6 @@ name: CI
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
   pull_request:
 
 permissions:
@@ -12,6 +9,7 @@ permissions:
 
 jobs:
   test:
+    if: ${{ !(github.event_name == 'pull_request') || github.event.pull_request.base.ref != 'release/local' || !contains(fromJSON('["dependabot","dependabot[bot]","renovate","renovate[bot]"]'), github.event.pull_request.user.login) }}
     timeout-minutes: 90
     name: test (${{ matrix.os }}, 3.14)
     runs-on: ${{ matrix.os }}

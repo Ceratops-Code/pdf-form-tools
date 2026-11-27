@@ -3,6 +3,7 @@ permissions:
   contents: read
 jobs:
   validate-repository:
+    if: ${{ !(github.event_name == 'pull_request') || github.event.pull_request.base.ref != 'release/local' || !contains(fromJSON('["dependabot","dependabot[bot]","renovate","renovate[bot]"]'), github.event.pull_request.user.login) }}
     timeout-minutes: 90
     name: validate-repository
     runs-on: ubuntu-latest
@@ -62,6 +63,5 @@ jobs:
 
 'on':
   workflow_dispatch: null
-  push: null
   pull_request:
     types: [opened, synchronize, reopened, edited]

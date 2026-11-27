@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   analyze:
-    if: ${{ !(github.event_name == 'pull_request') || github.event.pull_request.base.ref != 'release/local' || !contains(fromJSON('["dependabot","dependabot[bot]","renovate","renovate[bot]"]'), github.event.pull_request.user.login) }}
+    if: ${{ !(github.event_name == 'pull_request') || !contains(fromJSON('["dependabot","dependabot[bot]","renovate","renovate[bot]"]'), github.event.pull_request.user.login) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

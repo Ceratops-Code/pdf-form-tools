@@ -292,8 +292,6 @@ def main(argv: list[str] | None = None) -> int:
         args.executed = False
         args.diagnostic_path = (ROOT / (args.diagnostic_output or pathlib.Path(".test-diagnostics/pytest-failure.json"))).resolve()
         args.current_results = CurrentCheckResults(ROOT) if support is not None and (ROOT / ".git").exists() else None
-        if support is not None:
-            support.remove_test_diagnostic(args.diagnostic_path, root=ROOT, current=args.current_results)
         if args.probe_command is not None:
             args.probe_command = json.loads(args.probe_command)
             if (not isinstance(args.probe_command, list) or not args.probe_command
@@ -326,6 +324,9 @@ def main(argv: list[str] | None = None) -> int:
         def execute_request() -> int:
             nonlocal request_executed
             request_executed = True
+            # The result writer repairs interrupted appends before calling this.
+            if support is not None:
+                support.remove_test_diagnostic(args.diagnostic_path, root=ROOT, current=args.current_results)
             return execute_check(args, targets, inherited)
 
         try:

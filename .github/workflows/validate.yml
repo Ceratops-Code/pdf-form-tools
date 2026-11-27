@@ -59,6 +59,7 @@ jobs:
           if-no-files-found: ignore
           name: repository-validation-evidence
           path: ${{ runner.temp }}/repository-validation.log
+
 'on':
   workflow_dispatch: null
   push: null

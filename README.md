@@ -84,6 +84,13 @@ regions.
 
 ## Development
 
+Pass a temp base to `scripts/run-tests.py --temporary-root <path>`. Each
+checkout keeps its pytest files and caches in its own `.pytest-scratch`
+directory until its workers finish. After a forced stop, let the workers exit
+before running the tests again.
+Its generated `scripts/write_check_results.py` stores shared check outcomes;
+individual results append durably, and command boundaries compact the file.
+
 ```bash
 python -m pip install -e ".[dev]"
 python -m ruff check . --config pyproject.toml

@@ -903,7 +903,8 @@ class ResultStore:
     def _eligible(self, original: str | None) -> bool:
         if self.qualification_level is None:
             return original is None
-        return original in LEVELS and LEVELS.index(original) >= LEVELS.index(self.qualification_level)
+        minimum = "alpha" if self.qualification_level == "beta" else self.qualification_level
+        return original in LEVELS and LEVELS.index(original) >= LEVELS.index(minimum)
 
     def reference(self, record: Mapping[str, Any], *, reused: bool) -> dict[str, Any]:
         """Return original qualification and execution, never a promoted copy."""

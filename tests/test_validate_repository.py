@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -11,6 +13,50 @@ import pytest
 import scripts.deploy_local_package as local_deployer
 import scripts.publish_current_version as publisher
 import scripts.validate_repository as validator
+from scripts.write_check_results import select_build_check_summaries
+
+
+def test_local_beta_reads_tagged_alpha_checks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GITHUB_ACTIONS", "false")
+    storage_key = "members/packages/fixture"
+    version = "1.0a1"
+    tag = f"{storage_key}/{version}"
+    receipt = Path(".ceratops/build") / tag / "build_receipt.json"
+    summary = receipt.with_name("check_summary.json")
+    (tmp_path / receipt.parent).mkdir(parents=True)
+    original = {
+        "id": "fixture", "kind": "repository-check", "status": "passed",
+        "result_id": "original-alpha", "check_version": "original-check",
+        "qualificationLevel": "alpha", "completed_ns": 101,
+    }
+    summary_bytes = json.dumps({
+        "schema": "ceratops-check-summary.v1", "inputGroups": {}, "checkGroups": {}, "checks": [original],
+    }).encode()
+    (tmp_path / summary).write_bytes(summary_bytes)
+    (tmp_path / receipt).write_text(json.dumps({
+        "schema": "ceratops-build-result.v4", "status": "passed", "tag": tag,
+        "identity": {"storageKey": storage_key, "version": version, "target": "native"},
+        "receiptPath": receipt.as_posix(),
+        "committedResultPaths": [receipt.as_posix(), summary.as_posix()],
+        "checkSummary": {"root": "git", "path": summary.as_posix(),
+                         "size": len(summary_bytes), "sha256": hashlib.sha256(summary_bytes).hexdigest()},
+    }), encoding="utf-8")
+    commands = [
+        ["init", "--quiet"], ["add", "--force", "--", receipt.as_posix(), summary.as_posix()],
+        ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+         "-c", "commit.gpgsign=false", "-c", f"core.hooksPath={os.devnull}",
+         "commit", "--quiet", "-m", "Record fixture alpha checks"],
+        ["tag", "--no-sign", tag],
+    ]
+    for command in commands:
+        subprocess.run(["git", *command], cwd=tmp_path, check=True, capture_output=True)
+
+    for _repeat in range(2):
+        selected, = select_build_check_summaries(tmp_path, qualification_level="beta", target="native")
+        assert selected["receipt"]["identity"]["version"] == version
+        assert selected["summary"]["checks"] == [original]
+    for level in ("rc", "final"):
+        assert select_build_check_summaries(tmp_path, qualification_level=level, target="native") == []
 
 
 def test_commands_use_isolated_artifacts_and_preserve_paths_with_spaces(

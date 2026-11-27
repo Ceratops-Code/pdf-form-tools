@@ -654,7 +654,7 @@ def select_build_check_summaries(
     from packaging.version import InvalidVersion, Version
 
     levels = ("alpha", "beta", "rc", "final")
-    minimum = levels.index(qualification_level)
+    minimum = levels.index("alpha" if qualification_level == "beta" else qualification_level)
     head = _build_git(root, "rev-parse", "--verify", "--quiet", "HEAD^{commit}", missing=True).decode().strip()
     if not head:
         return []
